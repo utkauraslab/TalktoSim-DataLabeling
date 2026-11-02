@@ -1,0 +1,30 @@
+{
+  "event_id": "clip_001",
+  "time": {
+    "start": 42.0,
+    "end": 49.5,
+    "outcome_observed_at": 52.0
+  },
+  "X": {
+    "instrument": "grasper"
+  },
+  "Y": {
+    "action": "retract",
+    "direction": "superolateral"
+  },
+  "T": {
+    "anatomy": "gallbladder",
+    "region": "fundus"
+  },
+  "Z": {
+    "intended_goal": "expose hepatocystic triangle",
+    "goal_type": "anatomical_exposure",
+    "source": "surgeon_verified"
+  },
+  "O": {
+    "observed_effect": "increased_anatomical_visibility",
+    "goal_achieved": "partial",
+    "evidence_interval": [49.5, 52.0],
+    "source": "video_and_expert"
+  }
+}

@@ -22,6 +22,78 @@ app = Flask(__name__, static_folder='static')
 app.config['MAX_CONTENT_LENGTH'] = 20 * 1024**3
 LOCK = threading.RLock()
 FIELDS = ('instrument', 'action', 'target', 'intention', 'outcome')
+EVENT_FIELDS = {
+    'X': ('instrument',), 'Y': ('action', 'direction'),
+    'T': ('anatomy', 'region'),
+    'Z': ('intended_goal', 'goal_type', 'source'),
+    'O': ('observed_effect', 'goal_achieved', 'source'),
+}
+
+
+def event_label(label):
+    """Expose old flat labels without discarding any existing annotations."""
+    if isinstance(label.get('X'), dict):
+        return label
+    return dict(event_id=label.get('event_id', ''), **{'class': label.get('class', '')},
+                time=dict(start=None, end=None, outcome_observed_at=None),
+                X=dict(instrument=label.get('instrument', '')),
+                Y=dict(action=label.get('action', ''), direction=''),
+                T=dict(anatomy=label.get('target', ''), region=''),
+                Z=dict(intended_goal=label.get('intention', ''), goal_type='', source=''),
+                O=dict(observed_effect=label.get('outcome', ''), goal_achieved='',
+                       evidence_interval=[None, None], source=''))
+
+
+def clean_event(label, reviewed, duration):
+    if not isinstance(label, dict):
+        raise ValueError('Each annotation must be an object.')
+    legacy = not any(k in label for k in ('X', 'Y', 'T', 'Z', 'O', 'time'))
+    original = label
+    label = event_label(label) if legacy else label
+    entry = {k: str(label.get(k) or '').strip()[:2000] for k in ('class', 'event_id')}
+    if not entry['class']:
+        raise ValueError('Every annotation needs a Class.')
+    for group, keys in EVENT_FIELDS.items():
+        values = label.get(group, {})
+        if not isinstance(values, dict):
+            raise ValueError(f'{group} must be an object.')
+        entry[group] = {key: str(values.get(key) or '').strip()[:2000] for key in keys}
+
+    def seconds(value):
+        if value is None or value == '':
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('Times must be numeric seconds.')
+        value = float(value)
+        if not math.isfinite(value) or value < 0 or value > duration + 0.001:
+            raise ValueError(f'Times must be between 0 and the video duration ({duration:g} s).')
+        return value
+
+    timing = label.get('time', {})
+    if not isinstance(timing, dict):
+        raise ValueError('time must be an object.')
+    entry['time'] = {k: seconds(timing.get(k)) for k in ('start', 'end', 'outcome_observed_at')}
+    interval = label.get('O', {}).get('evidence_interval', [None, None])
+    if not isinstance(interval, list) or len(interval) != 2:
+        raise ValueError('Evidence interval must contain [start, end].')
+    entry['O']['evidence_interval'] = [seconds(v) for v in interval]
+    t = entry['time']
+    if t['start'] is not None and t['end'] is not None and t['start'] > t['end']:
+        raise ValueError('Event start must be at or before event end.')
+    if t['end'] is not None and t['outcome_observed_at'] is not None and t['end'] > t['outcome_observed_at']:
+        raise ValueError('Outcome observation time must be at or after event end.')
+    a, b = entry['O']['evidence_interval']
+    if a is not None and b is not None and a > b:
+        raise ValueError('Evidence start must be at or before evidence end.')
+    if reviewed:
+        if legacy:
+            if any(not original.get(k) for k in FIELDS):
+                raise ValueError('Complete all five semantic fields before marking reviewed.')
+        elif (not entry['event_id'] or any(v is None for v in t.values())
+              or any(not entry[g][k] for g, keys in EVENT_FIELDS.items() for k in keys)
+              or any(v is None for v in entry['O']['evidence_interval'])):
+            raise ValueError('Complete Event ID, all time fields, and all X/Y/T/Z/O fields before marking reviewed.')
+    return entry
 
 
 def now():
@@ -30,7 +102,7 @@ def now():
 
 def project_dir(pid):
     if not re.fullmatch(r'[a-f0-9]{32}', pid):
-        raise ValueError('项目编号无效')
+        raise ValueError('Invalid project ID.')
     return DATA / pid
 
 
@@ -38,7 +110,7 @@ def read_project(pid):
     with LOCK:
         path = project_dir(pid) / 'project.json'
         if not path.exists():
-            raise ValueError('找不到项目')
+            raise ValueError('Project not found.')
         return json.loads(path.read_text())
 
 
@@ -61,11 +133,11 @@ def extract(pid):
         probe = subprocess.run([ffmpeg(), '-hide_banner', '-i', str(folder / 'source.video')], capture_output=True, text=True)
         duration = re.search(r'Duration: (\d+):(\d+):(\d+(?:\.\d+)?)', probe.stderr)
         if not duration:
-            raise ValueError('无法读取视频时长，请上传有效的视频文件（推荐 MP4 / MOV）。')
+            raise ValueError('Could not read the video duration. Upload a valid video (MP4 / MOV recommended).')
         h, m, s = map(float, duration.groups())
         seconds = h * 3600 + m * 60 + s
         if math.ceil(seconds / p['interval']) > 50000:
-            raise ValueError('预计超过 50,000 帧，请增大抽帧间隔后创建新项目。')
+            raise ValueError('More than 50,000 frames expected. Increase the sampling interval and create a new project.')
         p.update(duration=seconds)
         save_project(p)
         frames_dir = folder / 'images'
@@ -83,10 +155,10 @@ def extract(pid):
                     save_project(p)
             code = process.wait()
         if code:
-            raise ValueError('视频解码失败，请检查文件是否损坏，或转换为 MP4 后重试。')
+            raise ValueError('Video decoding failed. Check the file or convert it to MP4 and try again.')
         files = sorted(frames_dir.glob('*.jpg'))
         if not files:
-            raise ValueError('未能抽取到图片，请尝试更小的时间间隔。')
+            raise ValueError('No frames extracted. Try a shorter sampling interval.')
         dimensions = re.search(r's:(\d+)x(\d+)', log.read_text(errors='replace'))
         p['width'], p['height'] = map(int, dimensions.groups()) if dimensions else (0, 0)
         p['frames'] = [dict(id=i + 1, file_name=f.name, timestamp=round(i * p['interval'], 6),
@@ -106,7 +178,7 @@ def bad_request(exc):
 
 @app.errorhandler(413)
 def too_large(exc):
-    return jsonify(error='视频超过 20 GB 上传上限。'), 413
+    return jsonify(error='The video exceeds the 20 GB upload limit.'), 413
 
 
 @app.before_request
@@ -115,7 +187,7 @@ def local_origin():
     if request.method in ('POST', 'PUT', 'DELETE'):
         origin = request.headers.get('Origin')
         if origin and origin != request.host_url.rstrip('/'):
-            return jsonify(error='不允许跨站请求'), 403
+            return jsonify(error='Cross-origin requests are not allowed.'), 403
 
 
 @app.get('/')
@@ -137,16 +209,16 @@ def projects():
 def create():
     video = request.files.get('video')
     if not video or not video.filename:
-        raise ValueError('请选择视频')
+        raise ValueError('Choose a video.')
     try:
         interval = float(request.form.get('interval', 1))
     except ValueError:
-        raise ValueError('抽帧间隔必须是数字')
+        raise ValueError('Sampling interval must be a number.')
     if not math.isfinite(interval) or not 0.04 <= interval <= 3600:
-        raise ValueError('间隔应介于 0.04 秒和 3600 秒之间')
+        raise ValueError('Sampling interval must be between 0.04 and 3600 seconds.')
     annotator = request.form.get('annotator', '').strip()[:200]
     if not annotator:
-        raise ValueError('请填写标注人')
+        raise ValueError('Enter an annotator name or ID.')
     pid = uuid.uuid4().hex
     folder = project_dir(pid)
     folder.mkdir()
@@ -171,26 +243,19 @@ def frame_image(pid, name):
 @app.put('/api/projects/<pid>/frames/<int:fid>')
 def update_frame(pid, fid):
     body = request.get_json()
+    if not isinstance(body, dict):
+        raise ValueError('Request body must be an object.')
     labels = body.get('labels')
     annotator = str(body.get('annotator', '')).strip()[:200]
     if not annotator:
-        raise ValueError('请填写标注人')
+        raise ValueError('Enter an annotator name or ID.')
     if not isinstance(labels, list) or len(labels) > 100:
-        raise ValueError('每帧最多支持 100 组标签')
-    cleaned = []
-    for label in labels:
-        if not isinstance(label, dict):
-            raise ValueError('标签格式错误')
-        entry = {k: str(label.get(k, '')).strip()[:2000] for k in ('class', *FIELDS)}
-        if not entry['class']:
-            raise ValueError('每组标签都需要填写 Class')
-        if body.get('reviewed') and any(not entry[k] for k in FIELDS):
-            raise ValueError('完成标注前，请填写全部五个语义字段')
-        cleaned.append(entry)
+        raise ValueError('Each frame supports up to 100 event annotations.')
     with LOCK:
         p = read_project(pid)
         if p['status'] != 'ready' or not 1 <= fid <= len(p['frames']):
-            raise ValueError('帧不存在或项目尚未就绪')
+            raise ValueError('Frame not found or project is not ready.')
+        cleaned = [clean_event(label, bool(body.get('reviewed')), p['duration']) for label in labels]
         p['frames'][fid - 1].update(labels=cleaned, reviewed=bool(body.get('reviewed')),
                                    annotator=annotator, updated_at=now())
         p['annotator'] = annotator
@@ -203,19 +268,25 @@ def dataset(p, only_reviewed=False):
     classes = sorted({a['class'] for f in frames for a in f['labels']})
     categories = [dict(id=i + 1, name=name, supercategory='semantic') for i, name in enumerate(classes)]
     category_ids = {c['name']: c['id'] for c in categories}
-    result = dict(info=dict(description=p['name'], version='1.0', date_created=p['created_at'],
+    result = dict(info=dict(description=p['name'], version='2.0', date_created=p['created_at'],
                             source_video=p['name'], sample_interval_seconds=p['interval'],
                             annotation_type='frame_semantics', schema='COCO + XYTZO semantic attributes'),
-                  licenses=[], categories=categories, images=[], annotations=[])
+                  licenses=[], categories=categories, images=[], annotations=[], events=[])
     for f in frames:
         result['images'].append(dict(id=f['id'], file_name='images/' + f['file_name'], width=p['width'],
                                      height=p['height'], timestamp_seconds=f['timestamp'],
                                      reviewed=f['reviewed'], annotator=f.get('annotator', ''),
                                      updated_at=f.get('updated_at')))
         for label in f['labels']:
+            event = event_label(label)
+            attributes = dict(instrument=event['X']['instrument'], action=event['Y']['action'],
+                              target=event['T']['anatomy'], intention=event['Z']['intended_goal'],
+                              outcome=event['O']['observed_effect'])
             result['annotations'].append(dict(id=len(result['annotations']) + 1, image_id=f['id'],
-                category_id=category_ids[label['class']], attributes={k: label[k] for k in FIELDS},
+                category_id=category_ids[label['class']], attributes=attributes, **event,
                 annotator=f.get('annotator', ''), updated_at=f.get('updated_at')))
+            result['events'].append(dict(**event, image_id=f['id'],
+                annotator=f.get('annotator', ''), updated_at=f.get('updated_at'), reviewed=f['reviewed']))
     return result
 
 
@@ -223,12 +294,15 @@ def dataset(p, only_reviewed=False):
 def export(pid):
     p = read_project(pid)
     if p['status'] != 'ready':
-        raise ValueError('项目尚未就绪')
+        raise ValueError('The project is not ready.')
     only_reviewed = request.args.get('reviewed') == '1'
     result = dataset(p, only_reviewed)
     if not result['images']:
-        raise ValueError('没有可导出的帧，请先完成标注或选择导出全部帧')
+        raise ValueError('No frames to export. Review a frame first or export all frames.')
     content = json.dumps(result, ensure_ascii=False, indent=2).encode()
+    if request.args.get('format') == 'events':
+        return send_file(io.BytesIO(json.dumps(result['events'], ensure_ascii=False, indent=2).encode()),
+                         mimetype='application/json', as_attachment=True, download_name='events.json')
     if request.args.get('format') == 'json':
         return send_file(io.BytesIO(content), mimetype='application/json', as_attachment=True, download_name='annotations.json')
     # Disk-backed archive avoids holding video datasets in RAM.
@@ -236,7 +310,8 @@ def export(pid):
     archive = tempfile.TemporaryFile()
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_STORED, allowZip64=True) as z:
         z.writestr('annotations.json', content)
-        z.writestr('README.txt', 'Frame annotation dataset\nCOCO-compatible image/category tables + semantic annotations.\nEach annotation is frame-level: no bounding boxes or segmentation are provided.\nX=instrument; Y=action; T=target; Z=intention; O=outcome.\nTimestamps are sampling-grid times in seconds.\nUnreviewed frames are drafts; reviewed frames with no annotations are explicitly empty.\n')
+        z.writestr('events.json', json.dumps(result['events'], ensure_ascii=False, indent=2))
+        z.writestr('README.txt', 'Frame annotation dataset\nCOCO-compatible image/category tables + semantic annotations.\nEach annotation is frame-level: no bounding boxes or segmentation are provided.\nevents.json contains nested event_id/time/X/Y/T/Z/O records, class and per-frame metadata.\nX=instrument; Y=action/direction; T=anatomy/region; Z=intention; O=outcome/evidence.\nEvent and evidence times are source-video seconds; image timestamps are sampling-grid times.\nTimestamps are sampling-grid times in seconds.\nUnreviewed frames are drafts; reviewed frames with no annotations are explicitly empty.\n')
         for item in result['images']:
             z.write(project_dir(pid) / item['file_name'], item['file_name'])
     archive.seek(0)
@@ -250,6 +325,6 @@ if __name__ == '__main__':
     for path in DATA.glob('*/project.json'):
         p = json.loads(path.read_text())
         if p['status'] == 'processing':
-            p.update(status='error', error='抽帧时服务中断，请重新上传视频创建项目。')
+            p.update(status='error', error='The server stopped during extraction. Upload the video again to create a new project.')
             save_project(p)
     app.run(host='127.0.0.1', port=int(os.environ.get('PORT', 5055)), threaded=True)

@@ -1,12 +1,12 @@
-# FrameLab · 视频语义标注工作台
+# FrameLab · Video Annotation Workspace
 
-本地运行的中文网页工具：上传视频 → 设置抽帧间隔 → 逐帧填写语义标签 → 导出图片与 JSON 数据集。
+An English-language, local web app for turning videos into annotated image datasets.
+Upload a video → select a sampling interval → annotate each frame → export JPG images and JSON.
 
-## 启动
+## Start
 
-macOS 用户直接双击 **start.command**，会启动服务并打开浏览器。首次需要 Python 3.10+ 和网络以安装依赖；FFmpeg 随依赖提供，无需单独安装。
-
-终端启动：
+On macOS, double-click **start.command**. It starts the local server and opens your browser.
+The first run requires Python 3.10+ and an internet connection to install dependencies. FFmpeg is bundled with `imageio-ffmpeg`.
 
 ```bash
 cd /Users/snow/Desktop/talktosim/label
@@ -15,65 +15,71 @@ python3 -m venv .venv
 .venv/bin/python app.py
 ```
 
-打开 http://127.0.0.1:5055 。使用期间保持终端运行，按 Ctrl+C 停止。若端口被占用，可使用 `PORT=5056 .venv/bin/python app.py` 并打开对应端口。
+Open http://127.0.0.1:5055. Keep the terminal running; Ctrl+C stops the server.
+For another port, run `PORT=5056 .venv/bin/python app.py` and open that port.
 
-## 使用方法
+## Annotate
 
-1. 上传视频并填写标注人姓名或 ID。
-2. 选择间隔：1 秒表示每秒一帧，0.5 秒表示每秒两帧，也可以自定义 0.04–3600 秒。抽帧保留原始分辨率，输出 JPG。最大上传 20 GB，每项目最多 50,000 帧。
-3. 填写每帧的 Class 和五个字段，可为一帧添加多组关系：
+1. Upload a video and enter an annotator name or ID.
+2. Choose the interval: **1 s** means one frame per second; **0.5 s** means two frames per second. Custom intervals range from 0.04 to 3600 seconds. Images retain the original resolution. Limits: 20 GB per video and 50,000 frames per project.
+3. Add one or more event annotations to a frame. Each record contains **Class**, **Event ID**, **Time**, and the structured **X/Y/T/Z/O** fields below.
+4. Edits autosave as drafts after a short delay. Every nonempty annotation needs a Class to save. All fields must be filled to mark a frame complete. To record a negative example, remove all annotations and mark the frame complete.
+5. Use **Copy previous**, the unreviewed filter, or arrow keys to navigate. Ctrl/⌘ + Enter completes the frame and advances. Editing a reviewed frame returns it to draft status.
+6. Export all frames (including drafts) or reviewed frames only.
 
-| 字段 | 含义 | 示例 |
-| --- | --- | --- |
-| Class | 类别，可自由填写 | tissue_manipulation |
-| X · Instrument | 工具 / 器械 | bipolar forceps |
-| Y · Action | 动作 | grasping |
-| T · Target | 目标 | tissue |
-| Z · Intention | 意图 | stabilize tissue |
-| O · Outcome | 结果 | tissue stabilized |
+| Group | Fields |
+| --- | --- |
+| Identity | `event_id`, `class` |
+| Time | `start`, `end`, `outcome_observed_at` |
+| X · Instrument | `instrument` |
+| Y · Action | `action`, `direction` |
+| T · Target | `anatomy`, `region` |
+| Z · Intention | `intended_goal`, `goal_type`, `source` |
+| O · Outcome | `observed_effect`, `goal_achieved`, `evidence_interval`, `source` |
 
-4. 输入后自动保存草稿。Class 是非空标签组的必填字段；五个语义字段齐全后才可标记完成。无相关内容时，移除所有标签并标记完成，即为空标注的负样本。
-5. 可以沿用上一帧、筛选未完成帧，用左右箭头切换（输入框内不会触发），Ctrl/⌘ + Enter 完成并下一帧。修改已完成帧会重新变为草稿。
-6. 导出全部帧或仅已完成帧，选择 ZIP（图片 + JSON）或仅 JSON。
+All times are numeric seconds relative to the uploaded video's start, including the outcome observation and evidence interval. They may extend beyond the current sampled frame. The server checks that times are within the source video, start ≤ end ≤ outcome observation, and evidence start ≤ evidence end. A zero timestamp is valid. Drafts may contain blank fields, represented by empty strings or null times. Source fields are entered by the annotator; the app does not verify their provenance.
 
-标注人以每帧为单位记录，修改标签时会更新该帧的标注人和 UTC 时间。当前版本保存每帧最新标注，不保存多人修改历史，不提供账号、协同锁或冲突合并；适合一名使用者在本机标注。
+## Annotation example
 
-## 导出格式
+Click **View annotation example** on the home page or in the annotation panel to view and download the supplied reference record. The full, unmodified reference is also in [static/example.json](static/example.json).
+
+The example describes grasper retraction of the gallbladder fundus from 42.0 to 49.5 seconds, with an outcome observed at 52.0 seconds. It is a reference only and never populates real labels automatically. Use the actual video when entering values. Class remains an additional dataset category, for example `anatomical_exposure`.
+
+## Export formats
 
 ```text
-dataset-xxxxxxxx.zip
-├── images/
-│   ├── 000001.jpg
-│   └── 000002.jpg
-├── annotations.json
-└── README.txt
+ dataset-xxxxxxxx.zip
+ ├── images/
+ │   ├── 000001.jpg
+ │   └── 000002.jpg
+ ├── annotations.json
+ ├── events.json
+ └── README.txt
 ```
 
-JSON 使用 COCO 兼容的 `images`、`annotations`、`categories` 表结构，并扩展帧级语义字段。它是帧级分类与语义关系数据，不是目标检测数据，不生成边界框或分割标注。需要严格 COCO 检测数据的训练器应先编写适配器。
+- **Images + JSON (ZIP)** includes all selected images and both JSON files.
+- **Dataset JSON only** exports the full dataset object without image binaries.
+- **Event JSON only** exports an array of nested records matching the example, with additional `class`, `image_id`, `annotator`, `updated_at`, and `reviewed` metadata.
 
-```json
-{
-  "images": [{"id": 1, "file_name": "images/000001.jpg", "width": 1920, "height": 1080, "timestamp_seconds": 0, "reviewed": true, "annotator": "Alice", "updated_at": "..."}],
-  "categories": [{"id": 1, "name": "tissue_manipulation", "supercategory": "semantic"}],
-  "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "attributes": {"instrument": "bipolar forceps", "action": "grasping", "target": "tissue", "intention": "stabilize tissue", "outcome": "tissue stabilized"}, "annotator": "Alice", "updated_at": "..."}]
-}
-```
+`annotations.json` uses COCO-compatible `images`, `annotations`, and `categories` tables, extended with nested event records. Each annotation includes `event_id`, `time`, `X`, `Y`, `T`, `Z`, `O`, and `class`; `image_id` connects it to an image. The top-level `events` array matches `events.json`. Legacy `attributes` are retained as a compact projection for existing consumers. This is frame-level semantic data, without detection boxes or segmentation; strict COCO detection trainers need an adapter.
 
-`info` 另记录源视频、抽帧间隔和数据版本；类别从实际标签生成，按名称排序分配 ID。`reviewed=false` 表示草稿；`reviewed=true` 且没有 annotation 表示确认无相关内容。仅 JSON 导出不包含图片，需要使用对应 ZIP 中的 images 文件夹。
+`info` records source video, sampling interval, and schema version (2.0). Categories are generated from Class names with deterministic alphabetical IDs. `reviewed=false` indicates a draft; a reviewed image without annotations is an explicit negative example. Event IDs are user-entered and can repeat across frames for the same event; use `(image_id, event_id)` to resolve frame-specific records. JSON-only exports refer to the image paths available in the corresponding ZIP.
 
-时间戳是从 0 开始的规则采样时间网格，FFmpeg 为每个采样位置选择附近的解码帧；采样精度受源视频帧率约束，不是原始帧 PTS。抽帧失败或服务中断时，页面会显示原因，可重新上传创建项目。
+Existing projects with flat five-field labels remain readable. Their semantic values are mapped to the new fields; unavailable timing, direction, region, and provenance fields remain blank rather than being invented. Fill them before marking an edited record complete. Backups are recommended before upgrading a stored dataset.
 
-## 数据位置与备份
+## Storage and privacy
 
-视频、抽出的图片及 `project.json` 持久保存在 `data/<项目 ID>/`。关闭浏览器后仍可从左侧项目列表继续。备份整个 `data/` 文件夹即可保留原视频和标注；ZIP 导出用于分享训练数据，不包含原视频。可以通过 `LABEL_DATA_DIR` 环境变量设置存储目录。
+Everything persists under `data/<project ID>/`: source video, extracted JPGs, and `project.json`. Reopen a project from the sidebar after closing the browser. Back up the entire `data/` directory to retain original videos and labels. Exported ZIPs omit source videos. Set `LABEL_DATA_DIR` to use another storage location.
 
-默认只监听本机 127.0.0.1，不需要云端服务。大视频会占用原视频、抽帧图片和临时导出 ZIP 的磁盘空间。上传与抽帧是不同阶段，上传完成后才开始后台解码。首次启动会下载依赖，之后网页不请求外部资源。
+Each frame records the latest annotator and UTC edit time. There is no multi-user edit history, login, or collaborative conflict handling; this app is intended for one annotator at a time on one computer. The server listens only on 127.0.0.1. After dependency installation, the app requires no external services or web assets.
 
-## 验证
+Image timestamps describe a regular sampling grid starting at zero; FFmpeg selects nearby decoded frames. Precision is limited by source frame rate; these are not original PTS values. If extraction fails or the server stops, the project displays an error and can be recreated by uploading again. Large videos require disk space for source video, extracted images, and temporary ZIP archives.
+
+## Tests
 
 ```bash
 .venv/bin/pip install pytest
 .venv/bin/python -m pytest -q
 ```
 
-测试覆盖真实视频生成与抽帧、间隔与时间戳、多标签、空标注、标注人、持久化、JSON/ZIP 内容、非法参数和损坏视频。
+Tests cover video extraction at 0.5/1 s intervals, frame timestamps, persistence, multiple labels, negative examples, annotator metadata, JSON/ZIP export, complete nested event round trips, partial drafts, zero/invalid timestamps, legacy labels, invalid uploads, and the English reference UI.
