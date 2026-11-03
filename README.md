@@ -8,6 +8,16 @@ Videos are processed on your device. Extracted images and annotations autosave i
 
 The published website source is on the [`gh-pages` branch](https://github.com/utkauraslab/TalktoSim-DataLabeling/tree/gh-pages). The Python app below is the optional local edition for developers.
 
+## Optional GitHub upload (website)
+
+Open **Export / upload → Optional: upload labeling to GitHub**. Select the upload scope, optionally include frame images, explicitly check the authorization box, and provide a GitHub token restricted to this repository with **Contents: read and write**. The on-page help provides a token-creation link. The GitHub account must have repository write access; organization approval may be required. Local downloads need no authorization or GitHub account.
+
+Authorized submissions are committed to `main` under `labeling/annotator_UTC-time/`, for example `labeling/Alice_2026-11-03T23-30-45-123Z/`. Each folder contains `annotations.json`, `events.json`, and `submission.json`, plus `dataset.zip` if images were selected. Each uploaded file is limited to 50 MiB; larger datasets can be downloaded locally. Class, all custom fields, annotator and timestamps are preserved. Names support Unicode, with unsafe path characters replaced.
+
+The repository is **public**, so the upload screen asks permission to publish the selected labels and optional images. The original video is never uploaded. Upload consent is off by default and resets for every attempt; without consent, no GitHub authorization or upload request is sent. Completing frames and downloading files never upload automatically. Tokens are used only in memory for the current upload, sent only to GitHub, and never stored in the browser or repository. Existing submission folders are never overwritten; concurrent commits preserve repository history.
+
+See the [website source and authorization guide](https://github.com/utkauraslab/TalktoSim-DataLabeling/blob/gh-pages/README.md) for details. The Python local edition below does not require GitHub access.
+
 An English-language, local web app for turning videos into annotated image datasets.
 Upload a video → select a sampling interval → annotate each frame → export JPG images and JSON.
 
