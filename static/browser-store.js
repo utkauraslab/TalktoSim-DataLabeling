@@ -243,6 +243,24 @@
     }
     const blob=await zip(entries(),progress);downloadBlob(blob,`dataset-${id.slice(0,8)}.zip`);
   }
+  async function prepareSubmission(id,{onlyReviewed=true,includeImages=false}={},progress) {
+    const p=await readProject(id);if(p.status!=='ready')throw Error('Wait until extraction finishes.');
+    const data=dataset(p,onlyReviewed),json=value=>new Blob([JSON.stringify(value,null,2)],{type:'application/json'});
+    const files=[{name:'annotations.json',blob:json(data)},{name:'events.json',blob:json(data.events)}];
+    if(includeImages) {
+      async function* entries(){
+        yield ['annotations.json',files[0].blob];yield ['events.json',files[1].blob];
+        for(const image of data.images){
+          const record=await run('images','readonly',store=>store.get(`${id}/${image.file_name.split('/').pop()}`));
+          if(!record)throw Error(`Missing image: ${image.file_name}.`);
+          yield [image.file_name,record.blob];
+        }
+      }
+      files.push({name:'dataset.zip',blob:await zip(entries(),progress)});
+    }
+    return {annotator:p.annotator,projectId:p.id,sourceVideo:p.name,frameCount:data.images.length,
+      annotationCount:data.annotations.length,onlyReviewed,includeImages,files};
+  }
   async function remove(id) {
     if(jobs.get(id)?.status==='processing')throw Error('Wait for extraction to finish before deleting this project.');
     await ready;
@@ -253,5 +271,5 @@
       tx.oncomplete=resolve;tx.onabort=tx.onerror=()=>reject(tx.error);
     });jobs.delete(id);
   }
-  window.frameStore={request,create,attachImage,releaseImages,exportData,remove};
+  window.frameStore={request,create,attachImage,releaseImages,exportData,prepareSubmission,remove};
 })();

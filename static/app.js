@@ -256,7 +256,61 @@ $('copyPrevious').onclick = () => { $('labels').replaceChildren(...(project.fram
 $('completeFrame').onclick = complete;
 $('editorAnnotator').oninput = () => { localStorage.setItem('framelab-annotator', $('editorAnnotator').value); changed(); };
 $('onlyPending').onchange = () => guarded(async () => { if ($('onlyPending').checked && project.frames[current].reviewed) { const next = project.frames.findIndex(f => !f.reviewed); if (next >= 0) current = next; else toast('All frames have been reviewed.'); } renderFrame(); });
-$('exportButton').onclick = () => guarded(async () => $('exportDialog').showModal());
+$('exportButton').onclick = () => guarded(async () => { resetGithubAuthorization(); $('exportDialog').showModal(); });
+let githubBusy=false,githubController=null;
+function githubAvailability() {
+  const authorized=$('githubConsent').checked;
+  $('githubAuthControls').hidden=!authorized;
+  $('githubUploadButton').disabled=githubBusy||!authorized||!$('githubToken').value.trim();
+  if(!authorized){$('githubToken').value='';githubController?.abort();}
+}
+function githubPreview() {
+  const frames=project?.frames.filter(frame=>!$('githubReviewedOnly').checked||frame.reviewed)||[];
+  let destination='Enter an annotator name to generate a folder.';
+  try{destination=`labeling/${githubUpload.folderName($('editorAnnotator').value)}/`;}catch{}
+  $('githubUploadPreview').textContent=`${frames.length} frames · ${frames.reduce((sum,frame)=>sum+frame.labels.length,0)} event records\n${destination}`;
+}
+function resetGithubAuthorization() {
+  githubController?.abort();$('githubToken').value='';$('githubConsent').checked=false;
+  $('githubReviewedOnly').checked=true;$('githubIncludeImages').checked=false;
+  $('githubUploadSection').open=false;$('githubUploadFields').disabled=githubBusy;
+  $('githubUploadResult').hidden=true;$('githubUploadResult').removeAttribute('href');
+  $('githubUploadStatus').textContent='Not authorized. Your data stays on this browser; local downloads remain available.';
+  githubPreview();githubAvailability();
+}
+$('githubConsent').onchange=()=>{
+  githubAvailability();
+  $('githubUploadStatus').textContent=$('githubConsent').checked?'Ready for your GitHub authorization token. Nothing has been uploaded.':'Not authorized. Local downloads remain available.';
+};
+$('githubToken').oninput=githubAvailability;
+for(const id of ['githubReviewedOnly','githubIncludeImages'])$(id).onchange=()=>{
+  $('githubConsent').checked=false;githubAvailability();githubPreview();
+  $('githubUploadStatus').textContent='Upload options changed. Authorize the selected data before uploading.';
+};
+$('exportDialog').addEventListener('close',()=>{
+  githubController?.abort();$('githubToken').value='';$('githubConsent').checked=false;githubAvailability();
+});
+$('githubUploadButton').onclick=async()=>{
+  if(githubBusy||!$('githubConsent').checked)return;
+  const token=$('githubToken').value.trim();if(!token)return;
+  $('githubToken').value='';githubBusy=true;githubController=new AbortController();
+  const controller=githubController,options={onlyReviewed:$('githubReviewedOnly').checked,includeImages:$('githubIncludeImages').checked};
+  $('githubUploadFields').disabled=true;$('githubUploadButton').disabled=true;$('githubUploadResult').hidden=true;
+  const status=message=>{$('githubUploadStatus').textContent=message;};
+  try{
+    await save();controller.signal.throwIfAborted();status('Preparing the authorized labeling data…');
+    const submission=await frameStore.prepareSubmission(project.id,options,count=>status(`Preparing ${count} files…`));
+    controller.signal.throwIfAborted();
+    const result=await githubUpload.upload({consent:true,token,submission,signal:controller.signal,onProgress:status});
+    status(`Uploaded as ${result.folder}. Authorized GitHub account: ${result.githubAccount}.`);
+    $('githubUploadResult').href=result.url;$('githubUploadResult').hidden=false;toast('Labeling uploaded to GitHub.');
+  }catch(error){
+    status(error.name==='AbortError'?'Upload canceled. Check the repository if the commit had already started.':error.message);
+  }finally{
+    githubBusy=false;githubController=null;$('githubUploadFields').disabled=false;
+    $('githubToken').value='';$('githubConsent').checked=false;githubAvailability();
+  }
+};
 async function download(format) {
   const button = $({zip:'exportZip', json:'exportJson', events:'exportEvents'}[format]); button.disabled = true; button.textContent = 'Preparing export…';
   try {
@@ -276,7 +330,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); move(1); }
 });
-window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
 function updateFile() { const file = $('video').files[0]; if (file) { $('fileName').textContent = file.name; $('fileMeta').textContent = `${(file.size / 1024**2).toFixed(1)} MB · Video selected`; } }
 $('video').onchange = updateFile;
 for (const event of ['dragenter','dragover']) $('dropzone').addEventListener(event, e => {e.preventDefault(); $('dropzone').classList.add('dragover');});
