@@ -1,5 +1,13 @@
 # FrameLab · Video Annotation Workspace
 
+**Open the website: https://utkauraslab.github.io/TalktoSim-DataLabeling/**
+
+No installation, GitHub account, or repository clone is required. Open the link, choose a video, select a sampling interval, annotate, and export the image/JSON dataset. The English website includes the annotation example, Tension and other Class options, and custom fields in every X/Y/T/Z/O section.
+
+Videos are processed on your device. Extracted images and annotations autosave in the current browser on the current device; export a dataset before clearing browser data or switching devices. Keep the tab open during frame extraction. H.264 MP4 is recommended; supported video formats and storage capacity depend on the browser.
+
+The published website source is on the [`gh-pages` branch](https://github.com/utkauraslab/TalktoSim-DataLabeling/tree/gh-pages). The Python app below is the optional local edition for developers.
+
 An English-language, local web app for turning videos into annotated image datasets.
 Upload a video → select a sampling interval → annotate each frame → export JPG images and JSON.
 
