@@ -159,3 +159,52 @@ def test_english_interface_and_example(client):
     assert '<html lang="en">' in html
     assert 'View annotation example' in html
     assert client.get('/static/example.json').json == {k:v for k,v in reference().items() if k != 'class'}
+
+
+def test_custom_fields_and_custom_class_round_trip(client, event_project):
+    record = reference()
+    record['class'] = 'my_custom_class'
+    for group in module.EVENT_FIELDS:
+        record[group]['xxx'] = f'Custom {group} value'
+        record[group]['second_field'] = 'A second note'
+    saved = client.put(f'/api/projects/{event_project}/frames/1', json=dict(labels=[record], reviewed=True, annotator='A'))
+    assert saved.status_code == 200
+    assert saved.json['labels'] == [record]
+    assert client.get(f'/api/projects/{event_project}').json['frames'][0]['labels'] == [record]
+    event = client.get(f'/api/projects/{event_project}/export?format=events').json[0]
+    data = client.get(f'/api/projects/{event_project}/export?format=json').json
+    for group in module.EVENT_FIELDS:
+        assert event[group] == record[group]
+        assert data['annotations'][0][group] == record[group]
+    assert data['categories'][0]['name'] == 'my_custom_class'
+    assert event['class'] == 'my_custom_class'
+    # Remove one custom field, edit another, and reopen to ensure no stale keys return.
+    del record['Z']['xxx']
+    record['O']['xxx'] = 'Edited outcome note'
+    assert client.put(f'/api/projects/{event_project}/frames/1', json=dict(labels=[record], reviewed=True, annotator='B')).status_code == 200
+    reopened = client.get(f'/api/projects/{event_project}').json['frames'][0]['labels'][0]
+    assert 'xxx' not in reopened['Z']
+    assert reopened['O']['xxx'] == 'Edited outcome note'
+
+
+@pytest.mark.parametrize('extra', [
+    {'':'empty name'}, {'intended_goal ':'collision'}, {'xxx':{'nested':'unsupported'}},
+    {'__proto__':'unsafe'}, {'constructor':'unsafe'}, {'prototype':'unsafe'},
+    {'xxx':'one', ' xxx ':'two'}, {'x'*81:'long name'}, {'xxx':'x'*2001},
+])
+def test_invalid_custom_fields(client, event_project, extra):
+    record = reference()
+    record['Z'].update(extra)
+    response = client.put(f'/api/projects/{event_project}/frames/1', json=dict(labels=[record], reviewed=False, annotator='A'))
+    assert response.status_code == 400
+    assert module.read_project(event_project)['frames'][0]['labels'] == []
+
+
+def test_empty_custom_values_are_drafts(client, event_project):
+    record = reference()
+    record['Z']['xxx'] = ''
+    endpoint = f'/api/projects/{event_project}/frames/1'
+    assert client.put(endpoint, json=dict(labels=[record], reviewed=False, annotator='A')).status_code == 200
+    assert client.put(endpoint, json=dict(labels=[record], reviewed=True, annotator='A')).status_code == 400
+    record['Z']['xxx'] = 'Filled in'
+    assert client.put(endpoint, json=dict(labels=[record], reviewed=True, annotator='A')).status_code == 200

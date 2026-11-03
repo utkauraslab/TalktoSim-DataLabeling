@@ -15,6 +15,15 @@ const eventSections = [
     ['O.evidence_interval.1', 'Evidence end (s)', '52.0', 'number'], ['O.source', 'Outcome source', 'video_and_expert']]]
 ];
 const fieldPaths = ['class', 'event_id', ...eventSections.flatMap(section => section[2].map(field => field[0]))];
+const classChoices = [
+  ['anatomical_exposure', 'Anatomical exposure'], ['tissue_manipulation', 'Tissue manipulation'],
+  ['dissection', 'Dissection'], ['cutting', 'Cutting'], ['coagulation', 'Coagulation'],
+  ['clipping', 'Clipping'], ['suturing', 'Suturing'], ['irrigation', 'Irrigation'],
+  ['suction', 'Suction'], ['inspection', 'Inspection']
+];
+const semanticGroups = ['X', 'Y', 'T', 'Z', 'O'];
+const standardKeys = Object.fromEntries(eventSections.filter(s => s[0] !== 'TIME').map(([letter, , fields]) =>
+  [letter, new Set(fields.map(field => field[0].split('.')[1]))]));
 const pathValue = (value, path) => path.split('.').reduce((v, key) => v?.[key], value);
 function normalizeLabel(value) {
   if (value.X) return value;
@@ -87,8 +96,30 @@ function makeGroup(raw = {}) {
     label.append(input); parent.append(label);
   }
   const identity = document.createElement('div'); identity.className = 'event-fields';
-  addInput(identity, ['class', 'Class *', 'anatomical_exposure']);
+  const classLabel = document.createElement('label'); classLabel.textContent = 'Class *';
+  const classSelect = document.createElement('select'); classSelect.className = 'class-select';
+  classSelect.setAttribute('aria-label', 'Class *');
+  const options = new Map(classChoices);
+  for (const frame of project.frames) for (const annotation of frame.labels) {
+    if (annotation.class && !options.has(annotation.class)) options.set(annotation.class, annotation.class);
+  }
+  if (value.class && !options.has(value.class)) options.set(value.class, value.class);
+  const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = 'Choose a class…';
+  classSelect.append(placeholder);
+  for (const [key, name] of options) {
+    const option = document.createElement('option'); option.value = key; option.textContent = name; classSelect.append(option);
+  }
+  const other = document.createElement('option'); other.value = ''; other.textContent = 'Other — enter your own'; other.dataset.custom = 'true'; classSelect.append(other);
+  classSelect.value = value.class || '';
+  classLabel.append(classSelect); identity.append(classLabel);
   addInput(identity, ['event_id', 'Event ID', `frame_${String(current + 1).padStart(6, '0')}_event_01`]);
+  const customClassLabel = document.createElement('label'); customClassLabel.className = 'custom-class-label'; customClassLabel.textContent = 'Custom class *'; customClassLabel.hidden = true;
+  const customClass = document.createElement('input'); customClass.className = 'custom-class-input'; customClass.placeholder = 'Enter your own class'; customClass.maxLength = 2000;
+  customClassLabel.append(customClass); identity.append(customClassLabel);
+  classSelect.onchange = () => {
+    customClassLabel.hidden = !classSelect.selectedOptions[0]?.dataset.custom;
+    if (!customClassLabel.hidden) customClass.focus();
+  };
   group.append(identity);
   for (const [letter, title, inputs] of eventSections) {
     const section = document.createElement('div'); section.className = 'event-section';
@@ -97,20 +128,62 @@ function makeGroup(raw = {}) {
     heading.append(badge, document.createTextNode(title)); section.append(heading);
     const content = document.createElement('div'); content.className = 'event-fields';
     for (const field of inputs) addInput(content, field);
-    section.append(content); group.append(section);
+    section.append(content);
+    if (letter !== 'TIME') {
+      const custom = document.createElement('div'); custom.className = 'custom-fields'; custom.dataset.group = letter;
+      for (const [name, text] of Object.entries(value[letter] || {})) {
+        if (!standardKeys[letter].has(name)) custom.append(makeCustomField(letter, name, text));
+      }
+      const add = document.createElement('button'); add.type = 'button'; add.className = 'add-custom-field'; add.textContent = '+ Other · Add a custom field';
+      add.onclick = () => {
+        if (custom.children.length >= 50) return toast('Each section supports up to 50 custom fields.');
+        const row = makeCustomField(letter); custom.append(row); row.querySelector('input').focus();
+      };
+      section.append(custom, add);
+    }
+    group.append(section);
   }
   group.addEventListener('input', changed); return group;
+}
+function makeCustomField(letter, name = '', value = '') {
+  const row = document.createElement('div'); row.className = 'custom-field-row';
+  for (const [key, title, text, placeholder, limit] of [
+    ['name', 'Field name', name, 'e.g. xxx', 80], ['value', 'Field value', value, 'Enter a value', 2000]
+  ]) {
+    const label = document.createElement('label'); label.textContent = title;
+    const input = document.createElement('input'); input.className = `custom-field-${key}`;
+    input.setAttribute('aria-label', `${letter} custom field ${key}`); input.value = text; input.placeholder = placeholder; input.maxLength = limit;
+    label.append(input); row.append(label);
+  }
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'remove-custom-field'; remove.textContent = '×';
+  remove.setAttribute('aria-label', `Remove ${letter} custom field`); remove.onclick = () => { row.remove(); changed(); };
+  row.append(remove); return row;
 }
 function collect() {
   return [...$('labels').children].map(group => {
     const label = {time:{}, X:{}, Y:{}, T:{}, Z:{}, O:{evidence_interval:[null,null]}};
-    for (const input of group.querySelectorAll('input')) {
+    const classSelect = group.querySelector('.class-select');
+    label.class = classSelect.selectedOptions[0]?.dataset.custom ? group.querySelector('.custom-class-input').value.trim() : classSelect.value;
+    for (const input of group.querySelectorAll('input[data-key]')) {
       const parts = input.dataset.key.split('.'), key = parts.pop();
       const target = parts.reduce((obj, key) => obj[key], label);
       target[key] = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value.trim();
     }
+    for (const custom of group.querySelectorAll('.custom-fields')) {
+      const letter = custom.dataset.group;
+      for (const row of custom.children) {
+        const name = row.querySelector('.custom-field-name').value.trim(), value = row.querySelector('.custom-field-value').value.trim();
+        if (!name && !value) continue;
+        if (!name) throw Error(`${letter}: name your custom field before saving.`);
+        if (name.length > 80 || ['__proto__', 'constructor', 'prototype'].includes(name) || Object.hasOwn(label[letter], name)) {
+          throw Error(`${letter}: use a unique field name that differs from the standard fields.`);
+        }
+        label[letter][name] = value;
+      }
+    }
     return label;
-  }).filter(label => fieldPaths.some(path => {const value = pathValue(label, path); return value !== '' && value !== null && value !== undefined;}));
+  }).filter(label => fieldPaths.some(path => {const value = pathValue(label, path); return value !== '' && value !== null && value !== undefined;})
+    || semanticGroups.some(letter => Object.keys(label[letter]).some(key => !standardKeys[letter].has(key))));
 }
 function changed() {
   revision++; project.frames[current].reviewed = false;
@@ -165,6 +238,7 @@ async function complete() {
   await guarded(async () => {
     const labels = collect();
     if (labels.some(label => fieldPaths.some(path => {const value = pathValue(label, path); return value === '' || value === null || value === undefined;}))) throw Error('Fill in Class, Event ID, all times, and all semantic fields before marking complete.');
+    if (labels.some(label => semanticGroups.some(letter => Object.entries(label[letter]).some(([key, value]) => !standardKeys[letter].has(key) && !value)))) throw Error('Fill in every custom field, or remove unused fields before marking complete.');
     project.frames[current].reviewed = true; revision++;
     try { await save(); } catch (err) { project.frames[current].reviewed = false; throw err; }
     const next = project.frames.findIndex((f, i) => i > current && (!$('onlyPending').checked || !f.reviewed));

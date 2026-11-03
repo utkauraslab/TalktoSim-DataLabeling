@@ -22,7 +22,7 @@ For another port, run `PORT=5056 .venv/bin/python app.py` and open that port.
 
 1. Upload a video and enter an annotator name or ID.
 2. Choose the interval: **1 s** means one frame per second; **0.5 s** means two frames per second. Custom intervals range from 0.04 to 3600 seconds. Images retain the original resolution. Limits: 20 GB per video and 50,000 frames per project.
-3. Add one or more event annotations to a frame. Each record contains **Class**, **Event ID**, **Time**, and the structured **X/Y/T/Z/O** fields below.
+3. Add one or more event annotations to a frame. Each record contains **Class**, **Event ID**, **Time**, and the structured **X/Y/T/Z/O** fields below. Choose Class from the dropdown, or select **Other — enter your own** and fill in **Custom class**. Previously saved classes in the project become reusable dropdown choices. The initial options are starter categories, not a fixed clinical ontology.
 4. Edits autosave as drafts after a short delay. Every nonempty annotation needs a Class to save. All fields must be filled to mark a frame complete. To record a negative example, remove all annotations and mark the frame complete.
 5. Use **Copy previous**, the unreviewed filter, or arrow keys to navigate. Ctrl/⌘ + Enter completes the frame and advances. Editing a reviewed frame returns it to draft status.
 6. Export all frames (including drafts) or reviewed frames only.
@@ -38,6 +38,8 @@ For another port, run `PORT=5056 .venv/bin/python app.py` and open that port.
 | O · Outcome | `observed_effect`, `goal_achieved`, `evidence_interval`, `source` |
 
 All times are numeric seconds relative to the uploaded video's start, including the outcome observation and evidence interval. They may extend beyond the current sampled frame. The server checks that times are within the source video, start ≤ end ≤ outcome observation, and evidence start ≤ evidence end. A zero timestamp is valid. Drafts may contain blank fields, represented by empty strings or null times. Source fields are entered by the annotator; the app does not verify their provenance.
+
+Each X/Y/T/Z/O section has **+ Other · Add a custom field**. Enter a field name and a text value; add more rows or remove a row with ×. For example, adding `xxx` in Intention with value `my note` exports `"Z": {"intended_goal": "...", "goal_type": "...", "source": "...", "xxx": "my note"}`. Custom fields persist through autosave, reopening, Copy previous, and both JSON exports. Field names must be unique within their section, must not duplicate standard fields, and may contain up to 80 characters. Values allow up to 2,000 characters, with at most 50 custom fields per section. Empty custom values can be saved as drafts; fill them in or remove them before marking complete. Custom classes are exported as the actual entered Class/category name.
 
 ## Annotation example
 

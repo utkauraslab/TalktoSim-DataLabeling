@@ -58,6 +58,21 @@ def clean_event(label, reviewed, duration):
         if not isinstance(values, dict):
             raise ValueError(f'{group} must be an object.')
         entry[group] = {key: str(values.get(key) or '').strip()[:2000] for key in keys}
+        reserved = set(keys) | ({'evidence_interval'} if group == 'O' else set())
+        extras = [(key, value) for key, value in values.items() if key not in reserved]
+        if len(extras) > 50:
+            raise ValueError(f'{group} supports up to 50 custom fields.')
+        for key, value in extras:
+            name = key.strip()
+            if not name or len(name) > 80 or name in reserved or name in ('__proto__', 'constructor', 'prototype'):
+                raise ValueError(f'{group}: choose a unique custom field name (1–80 characters).')
+            if name in entry[group]:
+                raise ValueError(f'{group}: duplicate custom field name: {name}.')
+            if not isinstance(value, str) or len(value) > 2000:
+                raise ValueError(f'{group}.{name} must be text, up to 2,000 characters.')
+            entry[group][name] = value.strip()
+            if reviewed and not entry[group][name]:
+                raise ValueError(f'Fill in {group}.{name} or remove it before marking reviewed.')
 
     def seconds(value):
         if value is None or value == '':
