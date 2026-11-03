@@ -17,6 +17,7 @@ const eventSections = [
 const fieldPaths = ['class', 'event_id', ...eventSections.flatMap(section => section[2].map(field => field[0]))];
 const classChoices = [
   ['anatomical_exposure', 'Anatomical exposure'], ['tissue_manipulation', 'Tissue manipulation'],
+  ['tension', 'Tension'],
   ['dissection', 'Dissection'], ['cutting', 'Cutting'], ['coagulation', 'Coagulation'],
   ['clipping', 'Clipping'], ['suturing', 'Suturing'], ['irrigation', 'Irrigation'],
   ['suction', 'Suction'], ['inspection', 'Inspection']
