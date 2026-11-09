@@ -132,3 +132,13 @@ test('closing or revoking an upload before its start sends nothing',async()=>{
   await assert.rejects(h.uploader.upload({consent:true,token:TOKEN,submission:submission(),signal:controller.signal}),/abort/i);
   assert.equal(h.calls.length,0);
 });
+
+test('clip submissions upload clip JSON and metadata without source media',async()=>{
+  const h=harness(),s=submission();s.unitType='clips';s.clipCount=2;s.frameCount=0;
+  s.files.push({name:'clips.json',blob:new Blob(['[{"id":"clip_001","start":0,"end":5},{"id":"clip_002","start":5,"end":12}]'])});
+  const result=await h.uploader.upload({consent:true,token:TOKEN,submission:s});
+  assert(h.files.has(`${result.folder}/clips.json`));
+  const metadata=JSON.parse(h.blobs.get(h.files.get(`${result.folder}/submission.json`)).toString('utf8'));
+  assert.equal(metadata.unit_type,'clips');assert.equal(metadata.clip_count,2);assert.equal(metadata.images_included,false);
+  assert(!metadata.files.some(name=>/\.mp4|\.zip/.test(name)));
+});

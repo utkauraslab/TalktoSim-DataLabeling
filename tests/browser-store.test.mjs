@@ -9,16 +9,17 @@ import {webcrypto} from 'node:crypto';
 import {IDBFactory,IDBKeyRange} from 'fake-indexeddb';
 
 const source=readFileSync(new URL('../static/browser-store.js',import.meta.url),'utf8');
+const clipSource=readFileSync(new URL('../static/clip-model.js',import.meta.url),'utf8');
 const example=JSON.parse(readFileSync(new URL('../static/example.json',import.meta.url),'utf8'));
 const pause=()=>new Promise(resolve=>setTimeout(resolve,2));
 function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
   const downloads=[],urls=new Map(),locks=new Set(),sampled=[];
   let next=0;
   class Video extends EventTarget {
-    current=0;videoWidth=320;videoHeight=240;readyState=2;duration=duration;
+    current=0;videoWidth=320;videoHeight=240;readyState=2;duration=duration;dataset={};
     set currentTime(value){this.current=value;queueMicrotask(()=>this.dispatchEvent(new Event('seeked')));}
     get currentTime(){return this.current;}
-    load(){if(this.src)queueMicrotask(()=>this.dispatchEvent(new Event(broken?'error':'loadeddata')));}
+    load(){if(this.src)queueMicrotask(()=>{if(broken)this.dispatchEvent(new Event('error'));else{this.dispatchEvent(new Event('loadedmetadata'));this.dispatchEvent(new Event('loadeddata'));}});}
     removeAttribute(name){delete this[name];}
   }
   const objectURL={createObjectURL(blob){const url=`blob:test/${++next}`;urls.set(url,blob);return url;},revokeObjectURL(url){urls.delete(url);}};
@@ -37,8 +38,9 @@ function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
     }},
     setTimeout(fn,ms){const timer=setTimeout(fn,ms);if(ms>=60000)timer.unref();return timer;},clearTimeout
   });
+  vm.runInContext(clipSource,context);context.clipModel=context.window.clipModel;
   vm.runInContext(source,context);
-  return {store:context.window.frameStore,downloads,sampled,db};
+  return {store:context.window.frameStore,model:context.window.clipModel,downloads,sampled,db,createVideo:()=>new Video()};
 }
 async function create(h,interval=0.5) {
   const p=await h.store.create(new File(['video'],'sample.mp4'),interval,'Alice');
@@ -135,4 +137,85 @@ test('submission preparation respects reviewed/image options and never downloads
   const withImages=await h.store.prepareSubmission(p.id,{onlyReviewed:false,includeImages:true});
   assert.equal(withImages.frameCount,4);assert.equal(withImages.files[2].name,'dataset.zip');
   assert(withImages.files[2].blob.size>0);assert.equal(h.downloads.length,0);
+});
+
+test('video-first projects persist source and cuts; confirmed clips export true clip annotations',async()=>{
+  const h=harness(),p=await h.store.createClipProject(new File(['source-video-bytes'],'case.mp4'),'Doctor A');
+  assert.equal(p.kind,'clips');assert.equal(p.status,'segmenting');assert.equal(p.frames.length,0);
+  await h.store.saveCuts(p.id,[0,.5,1.5,2]);
+  const reloaded=harness({db:h.db}),draft=await reloaded.store.request(`/api/projects/${p.id}`);
+  assert.deepEqual(plain(draft.segmentCuts),[0,.5,1.5,2]);
+  const ready=await reloaded.store.confirmCuts(p.id,draft.segmentCuts);
+  assert.deepEqual(plain(ready.frames.map(c=>[c.clip_id,c.start,c.end])),[['clip_001',0,.5],['clip_002',.5,1.5],['clip_003',1.5,2]]);
+  const label=record();label.time.end=.5;await save(reloaded,ready,[label]);
+  await reloaded.store.exportData(p.id,'json',true);
+  const data=JSON.parse(await reloaded.downloads.at(-1).blob.text());
+  assert.equal(data.info.version,'3.0');assert.equal(data.info.annotation_type,'video_clip_semantics');assert.equal(data.images,undefined);
+  assert.equal(data.clips.length,1);assert.equal(data.clips[0].end,.5);assert.equal(data.events[0].clip_id,'clip_001');
+  assert.equal(data.events[0].time.outcome_observed_at,2);assert.equal(data.events[0].Z.xxx,'Custom intention');
+  const submission=await reloaded.store.prepareSubmission(p.id);
+  assert.equal(submission.unitType,'clips');assert.equal(submission.clipCount,1);
+  assert.deepEqual(plain(submission.files.map(f=>f.name)),['annotations.json','events.json','clips.json']);
+  await assert.rejects(reloaded.store.prepareSubmission(p.id,{includeImages:true}),/never uploaded/);
+  await reloaded.store.exportData(p.id,'zip',false,undefined,{includeVideo:true});
+  const dir=mkdtempSync(path.join(tmpdir(),'framelab-clips-')),archive=path.join(dir,'clips.zip');
+  try{
+    writeFileSync(archive,Buffer.from(await reloaded.downloads.at(-1).blob.arrayBuffer()));
+    const result=spawnSync('python3',['-c',[
+      'import zipfile,json,sys','z=zipfile.ZipFile(sys.argv[1])','assert z.testzip() is None',
+      'assert z.read("source/case.mp4") == b"source-video-bytes"',
+      'clips=json.loads(z.read("clips.json"))','assert len(clips)==3',
+      'assert json.loads(z.read("annotations.json"))["videos"][0]["file_name"] in z.namelist()',
+      'assert [(c["start"],c["end"]) for c in clips] == [(0,.5),(.5,1.5),(1.5,2)]',
+      'assert not any(n.startswith("images/") for n in z.namelist())'
+    ].join('\n'),archive],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('changing cuts protects affected annotations and retains unchanged clip identities and review states',async()=>{
+  const h=harness(),p=await h.store.createClipProject(new File(['v'],'case.mp4'),'Doctor');
+  const ready=await h.store.confirmCuts(p.id,[0,.5,1.5,2]);
+  const label=record();label.time.end=.5;await save(h,ready,[label]);
+  await h.store.request(`/api/projects/${p.id}/frames/2`,{body:JSON.stringify({labels:[],reviewed:true,annotator:'Doctor'})});
+  await assert.rejects(h.store.confirmCuts(p.id,[0,.25,.5,1.5,2]),/Confirm resetting/);
+  assert.equal((await h.store.request(`/api/projects/${p.id}`)).frames[0].labels.length,1);
+  const revised=await h.store.confirmCuts(p.id,[0,.25,.5,1.5,2],{allowReset:true});
+  assert.equal(revised.frames[2].clip_id,'clip_002');assert.equal(revised.frames[2].reviewed,true);
+  assert.equal(revised.frames[0].labels.length,0);assert.equal(revised.frames[1].labels.length,0);
+  assert.notEqual(revised.frames[0].clip_id,'clip_001');
+});
+
+test('clip event action times stay inside its clip while outcome evidence may occur later',async()=>{
+  const h=harness(),p=await h.store.createClipProject(new File(['v'],'case.mp4'),'Doctor');
+  const ready=await h.store.confirmCuts(p.id,[0,1,2]);
+  await save(h,ready,[record()]);
+  const outside=record();outside.time.end=1.5;await assert.rejects(save(h,ready,[outside]),/within this clip/);
+  const first=await h.store.request(`/api/projects/${p.id}`);assert.equal(first.frames[0].labels[0].time.end,1);
+  const second=record();second.time.start=0;second.time.end=2;
+  await assert.rejects(h.store.request(`/api/projects/${p.id}/frames/2`,{body:JSON.stringify({labels:[second],reviewed:true,annotator:'Doctor'})}),/within this clip/);
+});
+
+test('partitions reject gaps, duplicates, short clips and non-numeric cuts; short videos can remain one clip',()=>{
+  const h=harness();assert.deepEqual(plain(h.model.normalize([0,.1],.1)),[0,.1]);
+  for(const cuts of [[.1,2],[0,1.9],[0,.1,2],[0,1,1,2],[0,NaN,2],[0,'1',2],[0,2,1,2]])assert.throws(()=>h.model.normalize(cuts,2));
+});
+
+test('upgrading a version-1 frame database preserves projects and saved images',async()=>{
+  const db=new IDBFactory(),id='1'.repeat(32);
+  await new Promise((resolve,reject)=>{
+    const request=db.open('talktosim-framelab-v1',1);
+    request.onupgradeneeded=()=>{const conn=request.result;conn.createObjectStore('projects',{keyPath:'id'});conn.createObjectStore('images',{keyPath:'key'}).createIndex('project_id','project_id');};
+    request.onsuccess=()=>{
+      const conn=request.result,tx=conn.transaction(['projects','images'],'readwrite');
+      tx.objectStore('projects').put({id,name:'legacy.mp4',created_at:new Date().toISOString(),status:'ready',duration:2,width:320,height:240,interval:1,frames:[{id:1,file_name:'000001.jpg',timestamp:0,labels:[],reviewed:false}]});
+      tx.objectStore('images').put({key:`${id}/000001.jpg`,project_id:id,blob:new Blob(['saved-image'])});
+      tx.oncomplete=()=>{conn.close();resolve();};tx.onerror=()=>reject(tx.error);
+    };request.onerror=()=>reject(request.error);
+  });
+  const h=harness({db}),p=await h.store.request(`/api/projects/${id}`);
+  assert.equal(p.name,'legacy.mp4');assert.equal(p.frames.length,1);
+  const image={dataset:{},isConnected:true};await h.store.attachImage(image,id,'000001.jpg');assert.match(image.src,/^blob:/);
+  const clip=await h.store.createClipProject(new File(['source'],'new.mp4'),'Doctor');assert.equal(clip.kind,'clips');
+  await h.store.remove(clip.id);await assert.rejects(h.store.attachVideo(h.createVideo(),clip.id),/source video is missing/i);
+  assert.equal((await h.store.request(`/api/projects/${id}`)).name,'legacy.mp4');
 });

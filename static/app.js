@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
 let project = null, current = 0, revision = 0, savedRevision = 0, saving = null;
-let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false;
+let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false, timeline;
+const isClipProject=()=>project?.kind==='clips';
+const unit=()=>isClipProject()?'clip':'frame';
 const eventSections = [
   ['TIME', 'Event timing · seconds', [
     ['time.start', 'Start', '42.0', 'number'], ['time.end', 'End', '49.5', 'number'],
@@ -39,7 +41,7 @@ async function api(url, options = {}) {
   if (!response.ok) { const body = await response.json().catch(() => ({})); throw Error(body.error || `Request failed (${response.status})`); }
   return response.json();
 }
-function show(view) { for (const name of ['welcome', 'processing', 'editor']) $(name).hidden = name !== view; window.scrollTo(0, 0); }
+function show(view) { document.querySelectorAll('video').forEach(video=>video.pause()); for (const name of ['welcome', 'segmenter', 'processing', 'editor']) $(name).hidden = name !== view; window.scrollTo(0, 0); }
 function formatTime(seconds) { return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toFixed(2).padStart(5, '0')}`; }
 async function refreshProjects() {
   const projects = await api('/api/projects');
@@ -47,25 +49,32 @@ async function refreshProjects() {
   $('projects').replaceChildren(...projects.map(p => {
     const button = document.createElement('button'); button.className = 'project-item' + (project?.id === p.id ? ' current' : '');
     button.append(document.createTextNode(p.name)); const detail = document.createElement('small');
-    detail.textContent = `${{ready:'Ready to annotate', processing:'Extracting frames', error:'Extraction failed'}[p.status]} · ${new Date(p.created_at).toLocaleDateString('en-US')}`;
+    detail.textContent = `${{ready:'Ready to annotate', segmenting:'Continue splitting', processing:'Extracting frames', error:'Needs attention'}[p.status]} · ${new Date(p.created_at).toLocaleDateString('en-US')}`;
     button.append(detail); button.onclick = () => guarded(() => openProject(p.id)); return button;
   }));
 }
 async function guarded(action) {
   if (navigating || uploading) return;
   navigating = true;
-  try { await save(); await action(); } catch (err) { toast(err.message); } finally { navigating = false; }
+  try { if(!$('segmenter').hidden)await timeline.flush(); await save(); await action(); } catch (err) { toast(err.message); } finally { navigating = false; }
+}
+async function openSegmentation(p) {
+  project=p;show('segmenter');await timeline.open(p);
 }
 async function openProject(id) {
   clearTimeout(pollTimer); project = await api(`/api/projects/${id}`);
   localStorage.setItem('framelab-project', id); $('breadcrumb').textContent = project.name;
   await refreshProjects();
+  if(project.kind==='clips'&&project.status==='segmenting'){await openSegmentation(project);return;}
   if (project.status !== 'ready') { show('processing'); poll(); return; }
   show('editor'); $('projectName').textContent = project.name;
-  $('projectInfo').textContent = `${project.frames.length} frames · 1 frame every ${project.interval} s · ${project.width} × ${project.height} · Duration ${formatTime(project.duration)}`;
-  $('editorAnnotator').value = project.annotator;
-  $('onlyPending').checked = false;
+  $('projectInfo').textContent = isClipProject()
+    ? `${project.frames.length} clips · Duration ${formatTime(project.duration)} · ${project.width} × ${project.height}`
+    : `${project.frames.length} frames · Legacy frame project · ${project.width} × ${project.height}`;
+  $('editorAnnotator').value = project.annotator;$('onlyPending').checked = false;
   current = Math.max(0, project.frames.findIndex(f => !f.reviewed));
+  $('editClips').hidden=!isClipProject();$('legacyViewer').hidden=isClipProject();$('clipViewer').hidden=!isClipProject();$('clipJumpLabel').hidden=!isClipProject();
+  if(isClipProject())await frameStore.attachVideo($('clipVideo'),project.id);
   renderFrame();
 }
 async function poll() {
@@ -94,7 +103,7 @@ function makeGroup(raw = {}) {
     const label = document.createElement('label'); label.textContent = name;
     const input = document.createElement('input'); input.dataset.key = path;
     input.type = type || 'text'; input.value = pathValue(value, path) ?? ''; input.placeholder = placeholder; input.maxLength = 2000;
-    if (type === 'number') { input.min = '0'; input.max = String(project.duration); input.step = 'any'; }
+    if (type === 'number') { input.min = isClipProject()&&['time.start','time.end'].includes(path)?String(project.frames[current].start):'0'; input.max = String(isClipProject()&&['time.start','time.end'].includes(path)?project.frames[current].end:project.duration); input.step = 'any'; }
     label.append(input); parent.append(label);
   }
   const identity = document.createElement('div'); identity.className = 'event-fields';
@@ -121,6 +130,12 @@ function makeGroup(raw = {}) {
   classSelect.onchange = () => {
     customClassLabel.hidden = !classSelect.selectedOptions[0]?.dataset.custom;
     if (!customClassLabel.hidden) customClass.focus();
+    if(isClipProject()&&(classSelect.value||classSelect.selectedOptions[0]?.dataset.custom)){
+      const clip=project.frames[current],index=[...$('labels').children].indexOf(group);
+      for(const [path,text]of [['event_id',clip.clip_id+(index>0?`_event_${index+1}`:'')],['time.start',clip.start],['time.end',clip.end]]){
+        const field=group.querySelector(`[data-key="${path}"]`);if(field&&field.value==='')field.value=text;
+      }
+    }
   };
   group.append(identity);
   for (const [letter, title, inputs] of eventSections) {
@@ -211,30 +226,34 @@ async function save() {
 }
 function updateProgress() {
   const done = project.frames.filter(f => f.reviewed).length;
-  $('completion').textContent = `${done} / ${project.frames.length} frames reviewed`;
+  $('completion').textContent = `${done} / ${project.frames.length} ${unit()}s reviewed`;
   $('annotationProgress').max = project.frames.length; $('annotationProgress').value = done;
 }
 function visibleIndices() { return project.frames.map((_, i) => i).filter(i => !$('onlyPending').checked || !project.frames[i].reviewed || i === current); }
 function renderFrame() {
   revision = savedRevision = 0;
-  const frame = project.frames[current];
-  frameStore.releaseImages();
-  frameStore.attachImage($('frameImage'), project.id, frame.file_name);
-  $('timestamp').textContent = `${formatTime(frame.timestamp)} / ${formatTime(project.duration)}`;
-  $('frameNumber').textContent = `Frame ${current + 1} / ${project.frames.length}`;
-  $('frameState').textContent = frame.reviewed ? '✓ Reviewed' : 'Unreviewed / Draft';
-  $('labels').replaceChildren(...(frame.labels.length ? frame.labels : [{}]).map(makeGroup));
-  $('saveStatus').textContent = 'Saved';
-  $('copyPrevious').disabled = current === 0;
-  const indices = visibleIndices(), pos = indices.indexOf(current);
-  $('prevFrame').disabled = pos <= 0; $('nextFrame').disabled = pos === indices.length - 1;
-  const near = indices.slice(Math.max(0, pos - 4), pos + 8);
-  $('filmstrip').replaceChildren(...near.map(i => {
-    const f = project.frames[i], button = document.createElement('button'); button.className = 'frame-thumb' + (i === current ? ' current' : '') + (f.reviewed ? ' done' : '');
-    const img = document.createElement('img'); frameStore.attachImage(img, project.id, f.file_name); img.alt = `Frame ${i + 1}`; img.loading = 'lazy';
-    const caption = document.createElement('span'); caption.textContent = formatTime(f.timestamp); button.append(img, caption);
-    button.onclick = () => guarded(async () => {current = i; renderFrame();}); return button;
-  })); updateProgress(); window.scrollTo(0, 0);
+  const frame = project.frames[current];frameStore.releaseImages();
+  if(isClipProject()){
+    $('clipVideo').pause();$('reviewFullVideo').checked=false;$('clipVideo').currentTime=frame.start;
+    $('clipRange').textContent=`${frame.clip_id} · ${formatTime(frame.start)} – ${formatTime(frame.end)} · ${(frame.end-frame.start).toFixed(2)} s`;
+    $('clipJump').replaceChildren(...project.frames.map((clip,i)=>{const option=document.createElement('option');option.value=i;option.textContent=`Clip ${i+1} · ${formatTime(clip.start)} – ${formatTime(clip.end)}${clip.reviewed?' ✓':''}`;return option;}));
+    $('clipJump').value=current;
+  }else frameStore.attachImage($('frameImage'),project.id,frame.file_name);
+  $('timestamp').textContent=`${formatTime(frame.timestamp)} / ${formatTime(project.duration)}`;
+  const title=unit()[0].toUpperCase()+unit().slice(1);
+  $('frameNumber').textContent=`${title} ${current+1} / ${project.frames.length}`;
+  $('frameState').textContent=frame.reviewed?'✓ Reviewed':'Unreviewed / Draft';
+  $('annotationHeading').textContent=`${title} annotations`;$('completeFrame').textContent=`✓ Complete & next ${unit()}`;
+  $('viewerHint').textContent=isClipProject()?'Each label belongs to this clip. Enable Review full video to inspect later outcomes.':'Legacy frame annotation project. Images retain their original resolution.';
+  $('labels').replaceChildren(...(frame.labels.length?frame.labels:[{}]).map(makeGroup));$('saveStatus').textContent='Saved';$('copyPrevious').disabled=current===0;
+  const indices=visibleIndices(),pos=indices.indexOf(current);$('prevFrame').disabled=pos<=0;$('nextFrame').disabled=pos===indices.length-1;
+  $('filmstrip').replaceChildren(...indices.slice(Math.max(0,pos-4),pos+8).map(i=>{
+    const f=project.frames[i],button=document.createElement('button');button.className='frame-thumb'+(isClipProject()?' clip-nav-card':'')+(i===current?' current':'')+(f.reviewed?' done':'');
+    if(isClipProject()){const name=document.createElement('strong');name.textContent=`Clip ${i+1}`;button.append(name);}
+    else{const img=document.createElement('img');frameStore.attachImage(img,project.id,f.file_name);img.alt=`Frame ${i+1}`;button.append(img);}
+    const caption=document.createElement('span');caption.textContent=isClipProject()?`${formatTime(f.start)} – ${formatTime(f.end)}`:formatTime(f.timestamp);button.append(caption);
+    button.onclick=()=>guarded(async()=>{current=i;renderFrame();});return button;
+  }));updateProgress();window.scrollTo(0,0);
 }
 function move(direction) { return guarded(async () => { const indices = visibleIndices(), next = indices[indices.indexOf(current) + direction]; if (next !== undefined) { current = next; renderFrame(); } }); }
 async function complete() {
@@ -245,18 +264,41 @@ async function complete() {
     project.frames[current].reviewed = true; revision++;
     try { await save(); } catch (err) { project.frames[current].reviewed = false; throw err; }
     const next = project.frames.findIndex((f, i) => i > current && (!$('onlyPending').checked || !f.reviewed));
-    if (next >= 0) {current = next; renderFrame();} else { renderFrame(); toast('Frame complete. Continue reviewing or export your dataset.'); }
+    if (next >= 0) {current = next; renderFrame();} else { renderFrame(); toast(`${unit()[0].toUpperCase()+unit().slice(1)} complete. Continue reviewing or export your dataset.`); }
   });
 }
 $('newProject').onclick = () => guarded(async () => { clearTimeout(pollTimer); project = null; localStorage.removeItem('framelab-project'); $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); });
 $('backFromError').onclick = () => $('newProject').click();
 $('prevFrame').onclick = () => move(-1); $('nextFrame').onclick = () => move(1);
 $('addLabel').onclick = () => { $('labels').append(makeGroup()); $('labels').lastChild.querySelector('input').focus(); };
-$('copyPrevious').onclick = () => { $('labels').replaceChildren(...(project.frames[current - 1].labels.length ? project.frames[current - 1].labels : [{}]).map(makeGroup)); changed(); };
+$('copyPrevious').onclick = () => {
+  const previous=structuredClone(project.frames[current-1].labels);
+  if(isClipProject())previous.forEach((label,i)=>{label.event_id=project.frames[current].clip_id+(i?`_event_${i+1}`:'');label.time={start:project.frames[current].start,end:project.frames[current].end,outcome_observed_at:null};label.O.evidence_interval=[null,null];});
+  $('labels').replaceChildren(...(previous.length?previous:[{}]).map(makeGroup));changed();
+};
+$('editClips').onclick=()=>guarded(async()=>openSegmentation(await api(`/api/projects/${project.id}`)));
+$('clipJump').onchange=()=>guarded(async()=>{current=Number($('clipJump').value);renderFrame();}).finally(()=>$('clipJump').value=current);
+$('playClip').onclick=()=>{const clip=project.frames[current];$('reviewFullVideo').checked=false;$('clipVideo').currentTime=clip.start;$('clipVideo').play().catch(e=>toast(e.message));};
+$('clipVideo').addEventListener('timeupdate',()=>{
+  if(!isClipProject()||$('editor').hidden||$('reviewFullVideo').checked)return;
+  const clip=project.frames[current],video=$('clipVideo');
+  if(video.currentTime<clip.start-.05)video.currentTime=clip.start;
+  if(video.currentTime>=clip.end){video.pause();if(video.currentTime>clip.end+.01)video.currentTime=clip.end;}
+});
+$('reviewFullVideo').onchange=()=>{if(!$('reviewFullVideo').checked){$('clipVideo').pause();$('clipVideo').currentTime=project.frames[current].start;}};
 $('completeFrame').onclick = complete;
 $('editorAnnotator').oninput = () => { localStorage.setItem('framelab-annotator', $('editorAnnotator').value); changed(); };
-$('onlyPending').onchange = () => guarded(async () => { if ($('onlyPending').checked && project.frames[current].reviewed) { const next = project.frames.findIndex(f => !f.reviewed); if (next >= 0) current = next; else toast('All frames have been reviewed.'); } renderFrame(); });
-$('exportButton').onclick = () => guarded(async () => { resetGithubAuthorization(); $('exportDialog').showModal(); });
+$('onlyPending').onchange = () => guarded(async () => { if ($('onlyPending').checked && project.frames[current].reviewed) { const next = project.frames.findIndex(f => !f.reviewed); if (next >= 0) current = next; else toast(`All ${unit()}s have been reviewed.`); } renderFrame(); });
+$('exportButton').onclick = () => guarded(async () => { configureExport(); resetGithubAuthorization(); $('exportDialog').showModal(); });
+function configureExport(){
+  const clips=isClipProject();$('includeSourceLabel').hidden=!clips;$('includeSourceVideo').checked=false;$('githubImagesLabel').hidden=clips;
+  $('exportScope').options[0].textContent=`All ${unit()}s (including drafts)`;$('exportScope').options[1].textContent=`Reviewed ${unit()}s only`;
+  $('githubReviewedOnly').parentElement.lastChild.textContent=` Upload reviewed ${unit()}s only`;
+  $('exportDescription').textContent=clips?'Export clip boundaries, event labels, categories and annotator metadata.':'Export a legacy frame dataset with images and labels.';
+  $('exportStructure').textContent=clips?'dataset.zip\n├── clips.json · Start / end times\n├── annotations.json · Complete clip dataset\n├── events.json · Event labels\n├── README.txt\n└── source/ · Only if selected below':'dataset.zip\n├── images/\n├── annotations.json\n├── events.json\n└── README.txt';
+  $('exportHint').textContent=clips?'Clips are exact time ranges in the source video. Independent trimmed MP4 files are not generated. The source video can be included in your local ZIP only.':'Frame-level semantic annotations with COCO-compatible image tables.';
+  $('exportZip').textContent=clips?'↓ Download ZIP':'↓ Images + JSON (ZIP)';
+}
 let githubBusy=false,githubController=null;
 function githubAvailability() {
   const authorized=$('githubConsent').checked;
@@ -268,7 +310,7 @@ function githubPreview() {
   const frames=project?.frames.filter(frame=>!$('githubReviewedOnly').checked||frame.reviewed)||[];
   let destination='Enter an annotator name to generate a folder.';
   try{destination=`labeling/${githubUpload.folderName($('editorAnnotator').value)}/`;}catch{}
-  $('githubUploadPreview').textContent=`${frames.length} frames · ${frames.reduce((sum,frame)=>sum+frame.labels.length,0)} event records\n${destination}`;
+  $('githubUploadPreview').textContent=`${frames.length} ${unit()}s · ${frames.reduce((sum,frame)=>sum+frame.labels.length,0)} event records\n${destination}`;
 }
 function resetGithubAuthorization() {
   githubController?.abort();$('githubToken').value='';$('githubConsent').checked=false;
@@ -315,12 +357,12 @@ async function download(format) {
   const button = $({zip:'exportZip', json:'exportJson', events:'exportEvents'}[format]); button.disabled = true; button.textContent = 'Preparing export…';
   try {
     const scope = $('exportScope').value;
-    if (scope === '1' && !project.frames.some(f => f.reviewed)) throw Error('No reviewed frames yet. Complete an annotation first.');
+    if (scope === '1' && !project.frames.some(f => f.reviewed)) throw Error(`No reviewed ${unit()}s yet. Complete an annotation first.`);
     await frameStore.exportData(project.id, format, scope === '1', count => {
       button.textContent = `Preparing ${count} files…`;
-    });
+    },{includeVideo:$('includeSourceVideo').checked});
     toast('Export ready. Check your browser downloads.');
-  } catch (err) { toast(err.message); } finally { button.disabled = false; button.textContent = {zip:'↓ Images + JSON (ZIP)', json:'Dataset JSON only', events:'Event JSON only'}[format]; }
+  } catch (err) { toast(err.message); } finally { button.disabled = false; button.textContent = {zip:isClipProject()?'↓ Download ZIP':'↓ Images + JSON (ZIP)', json:'Dataset JSON only', events:'Event JSON only'}[format]; }
 }
 $('exportEvents').onclick = () => download('events'); $('exportJson').onclick = () => download('json'); $('exportZip').onclick = () => download('zip');
 document.addEventListener('keydown', event => {
@@ -330,15 +372,12 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); move(1); }
 });
-window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || timeline?.dirty || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
 function updateFile() { const file = $('video').files[0]; if (file) { $('fileName').textContent = file.name; $('fileMeta').textContent = `${(file.size / 1024**2).toFixed(1)} MB · Video selected`; } }
 $('video').onchange = updateFile;
 for (const event of ['dragenter','dragover']) $('dropzone').addEventListener(event, e => {e.preventDefault(); $('dropzone').classList.add('dragover');});
 for (const event of ['dragleave','drop']) $('dropzone').addEventListener(event, e => {e.preventDefault(); $('dropzone').classList.remove('dragover');});
 $('dropzone').addEventListener('drop', e => { if (e.dataTransfer.files.length) { const transfer = new DataTransfer(); transfer.items.add(e.dataTransfer.files[0]); $('video').files = transfer.files; updateFile(); } });
-function frequency() { const seconds = Number($('interval').value); $('frequencyHint').textContent = seconds > 0 ? `1 frame every ${seconds} s · About ${Math.round(60 / seconds)} frames / minute` : 'Enter a valid sampling interval'; document.querySelectorAll('[data-interval]').forEach(button => button.classList.toggle('selected', Number(button.dataset.interval) === seconds)); }
-document.querySelectorAll('[data-interval]').forEach(button => button.onclick = () => { $('interval').value = button.dataset.interval; frequency(); });
-$('interval').oninput = frequency;
 $('annotator').value = localStorage.getItem('framelab-annotator') || '';
 $('uploadForm').onsubmit = async event => {
   event.preventDefault(); if (uploading) return;
@@ -346,16 +385,17 @@ $('uploadForm').onsubmit = async event => {
   uploading = true; $('startButton').disabled = true; $('startButton').textContent = 'Opening video…';
   try {
     localStorage.setItem('framelab-annotator', $('annotator').value);
-    const created = await frameStore.create(file, Number($('interval').value), $('annotator').value);
+    const created = await frameStore.createClipProject(file, $('annotator').value);
     uploading = false; await openProject(created.id);
   } catch(err) { toast(err.message); }
-  finally { uploading = false; $('startButton').disabled = false; $('startButton').textContent = 'Create project & extract →'; }
+  finally { uploading = false; $('startButton').disabled = false; $('startButton').textContent = 'Open video & split →'; }
 };
 $('deleteProject').onclick = () => guarded(async () => {
-  if (!confirm('Delete this project and its images from this browser? Export a dataset first if you need a copy. This cannot be undone.')) return;
+  if (!confirm('Delete this project and its saved media from this browser? Export a dataset first if you need a copy. This cannot be undone.')) return;
   await frameStore.remove(project.id); project = null; localStorage.removeItem('framelab-project');
   $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); toast('Project removed from this browser.');
 });
+timeline=new ClipTimeline({onConfirm:async p=>openProject(p.id),onCancel:async p=>{if(p.status==='ready')await openProject(p.id);else{project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}},onError:toast});
 (async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { await openProject(id); } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
 
 let exampleRecord;
