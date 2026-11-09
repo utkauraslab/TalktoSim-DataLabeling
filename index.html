@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TalktoSim FrameLab · Video Annotation</title><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'"><link rel="stylesheet" href="./static/style.css?v=incremental-2"></head>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TalktoSim FrameLab · Video Annotation</title><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; form-action 'none'"><link rel="stylesheet" href="./static/style.css?v=resume-layout-1"></head>
 <body>
 <aside class="sidebar">
   <a class="brand" href="./"><span class="brand-icon">▥</span> FrameLab<span class="local">WEB</span></a>
@@ -21,7 +21,15 @@
       <div class="setup-grid clip-setup"><div><label class="field-label" for="annotator">Doctor / annotator <small>Recorded with your clip labels</small></label><input id="annotator" placeholder="Your name or annotator ID" maxlength="200" required></div><div class="note">One clip at a time<br><span>Choose one interval, label and save it, then add another. Overlapping clips are welcome.</span></div></div>
       <div class="setup-footer"><span>Video clips · Overlapping clips · JSON labels</span><button class="primary" id="startButton">Open video <span>→</span></button></div>
     </form>
-    <div class="setup-card"><h2>Resume saved labeling</h2><p>Select a progress JSON (or annotations.json) and the original video. Your current projects also reopen from Recent projects.</p><label>Progress / dataset JSON<input id="progressFile" type="file" accept=".json,application/json"></label><label>Original video<input id="resumeVideo" type="file" accept="video/*"></label><button id="resumeProject" class="secondary">Load progress & continue</button></div><div class="schema-preview"><div><h3>One consistent event structure</h3><button type="button" class="text-button example-trigger">View annotation example ↗</button><p>Class + Event ID + Time + X/Y/T/Z/O.</p></div><div class="schema-fields"><span><b>X</b>Instrument<small>Instrument</small></span><span><b>Y</b>Action<small>Action</small></span><span><b>T</b>Target<small>Anatomy</small></span><span><b>Z</b>Intention<small>Intention</small></span><span><b>O</b>Outcome<small>Outcome</small></span></div></div>
+    <section class="setup-card resume-card" aria-labelledby="resumeHeading">
+      <div class="card-heading resume-heading"><div><div class="eyebrow">CONTINUE YOUR WORK</div><h2 id="resumeHeading">Resume saved labeling</h2><p>Load your saved progress and reconnect the original video.</p></div><span class="pill">LOCAL FILES</span></div>
+      <div class="resume-files">
+        <div class="resume-file"><label for="progressFile"><span class="resume-step">01</span><span>Saved progress<small>Progress JSON or annotations.json</small></span></label><input id="progressFile" type="file" accept=".json,application/json" aria-describedby="progressFileHelp"><p id="progressFileHelp">Includes your clips, labels and review status.</p></div>
+        <div class="resume-file"><label for="resumeVideo"><span class="resume-step">02</span><span>Original video<small>The same video used for this project</small></span></label><input id="resumeVideo" type="file" accept="video/*" aria-describedby="resumeVideoHelp"><p id="resumeVideoHelp">Keep its original filename. The video stays on your device.</p></div>
+      </div>
+      <div class="setup-footer resume-footer"><p>Continuing on this browser?<br><span>Open your project from <strong>Recent projects</strong> instead.</span></p><button id="resumeProject" type="button" class="primary">Load progress &amp; continue <span aria-hidden="true">→</span></button></div>
+    </section>
+    <div class="schema-preview"><div><h3>One consistent event structure</h3><button type="button" class="text-button example-trigger">View annotation example ↗</button><p>Class + Event ID + Time + X/Y/T/Z/O.</p></div><div class="schema-fields"><span><b>X</b>Instrument<small>Instrument</small></span><span><b>Y</b>Action<small>Action</small></span><span><b>T</b>Target<small>Anatomy</small></span><span><b>Z</b>Intention<small>Intention</small></span><span><b>O</b>Outcome<small>Outcome</small></span></div></div>
   </section>
   <section id="segmenter" hidden>
     <div class="editor-heading"><div><div class="eyebrow">ADD ONE CLIP</div><h1>Choose the moments that matter.</h1><p id="segmentName"></p></div><button id="cancelSegmentation" class="secondary">Back to projects</button></div>
