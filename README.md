@@ -2,17 +2,17 @@
 
 **Open the website: https://utkauraslab.github.io/TalktoSim-DataLabeling/**
 
-Choose a video, drag timeline dividers to define clips, label each clip, and export the dataset. No installation, repository clone, or GitHub account is needed for local annotation and downloads. Videos, cut positions and labels are stored on this browser and device. Nothing is shared without your optional GitHub upload authorization.
+Add one clip, label and save it, then add the next. No installation or GitHub account is required for local work. All videos and annotations stay on this device unless an optional upload is authorized.
 
+## Doctor workflow: one clip at a time
 
-## Doctor workflow: split first, then label clips
+1. Upload the video and enter your annotator name. No clips are generated automatically.
+2. Click **Add a clip**, drag the Start and End sliders or enter exact seconds, preview the interval, and click **Add this clip → Label**. Each interval is independent: overlaps and unannotated gaps are allowed. Minimum clip duration is 0.25 seconds.
+3. Fill in Class and X/Y/T/Z/O. **Save clip locally** stores an unfinished draft; edits also autosave. **Save & complete this clip** validates the full record. Click **Add a clip** whenever you want another interval. Existing clips are preserved.
+4. Use **Download progress** to save a resumable JSON file on disk. The same browser can reopen projects directly from **Recent projects** after interruption. To restore from a file, choose **Resume saved labeling**, the progress JSON (or complete `annotations.json` dataset), and the original video. The video filename, duration and dimensions must match. Import creates a new local project without overwriting existing work. Progress files contain labels and boundaries, not the video; keep the original separately.
+5. When all added clips are reviewed, click **Finish project**. This saves completion locally and enables the optional GitHub upload. Adding a clip or editing labels returns the project to work in progress. Nothing uploads automatically. Dataset downloads and progress backups remain available before finishing.
 
-1. **Upload video** and enter the doctor / annotator name. New projects open the full video directly; there is no frame-frequency setting.
-2. **Split into clips**: drag the playhead to a boundary and click **Split** (shortcut **S**). Drag the vertical dividers to adjust cuts. Select a divider to remove it, type an exact time, or use arrow keys for 0.1-second adjustments (Shift + arrow: 1 second). **Undo** restores a previous partition. Click a clip in the list to preview that range.
-3. **Confirm clips → Annotate** opens a video player for each clip. **Play this clip** starts at its beginning and stops at its end. Use **Review full video** to inspect outcome evidence later in the recording. The clip selector and Previous / Next controls navigate between clips.
-4. Choose a Class and fill in X/Y/T/Z/O fields and optional custom fields. Selecting a Class prefills the event ID and the clip's start/end times. Outcome and evidence times remain doctor-entered and can extend beyond the action clip, within the source video. Times always refer to the beginning of the original video. Complete each clip, then download or optionally authorize a GitHub upload.
-
-Cuts cover the entire video without gaps or overlaps. Each clip is at least 0.25 seconds (a shorter video can remain one clip), with up to 2,000 clips. Cut positions autosave, so segmentation can be resumed. **Edit clips** reopens the timeline: unchanged intervals keep their clip IDs, labels and review states; changes affecting annotated or reviewed clips require explicit confirmation before clearing only those affected annotations.
+Event start/end must lie inside its clip. Outcome evidence can occur later in the source video; use **Review full video** to inspect it. Times use seconds from the original video start; playback times display hours for long recordings.
 
 The source video is stored in IndexedDB for playback after reopening. Browser storage must have enough free space for it; unsupported codecs or insufficient space produce an actionable error. Original frame projects from previous releases remain readable and exportable. New projects use clip annotation.
 
@@ -24,7 +24,7 @@ The ZIP contains `clips.json`, `annotations.json`, `events.json`, and a README. 
 
 ## Optional GitHub upload
 
-In **Export / upload**, expand **Optional: upload labeling to GitHub**.
+After **Finish project**, in **Export / upload**, expand **Optional: upload labeling to GitHub**.
 
 1. Choose reviewed clips only (default), or include drafts. Legacy frame projects may optionally include frame images; new clip projects upload JSON only.
 2. Read the destination and public-data notice. Check **I authorize uploading…** only if you want to share that data in the repository.
@@ -61,4 +61,4 @@ Use an H.264 MP4 for broad compatibility. Keep the tab open during extraction. S
 
 ## Development verification
 
-The site is static HTML/CSS/JS. Install test dependencies with `npm install` and run `npm test` using Node 22+; Python 3 is used for independent ZIP integrity checks. Tests cover clip partitions, annotation preservation when boundaries change, source-video persistence, clip time validation, version-1 database migration, legacy frame sampling, JSON/ZIP export, custom fields, authorization gating, token handling, optional images, repository permissions, folder collisions, and concurrent Git commits. GitHub upload tests use mocked API calls and never upload test labels or real credentials to the repository.
+The site is static HTML/CSS/JS. Install test dependencies with `npm install` and run `npm test` using Node 22+; Python 3 is used for independent ZIP integrity checks. Tests cover incremental overlapping clips, draft disk backup/restore, project completion upload gating, legacy clip partitions, annotation preservation when boundaries change, source-video persistence, clip time validation, version-1 database migration, legacy frame sampling, JSON/ZIP export, custom fields, authorization gating, token handling, optional images, repository permissions, folder collisions, and concurrent Git commits. GitHub upload tests use mocked API calls and never upload test labels or real credentials to the repository.

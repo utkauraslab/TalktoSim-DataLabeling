@@ -61,8 +61,8 @@
   }
   function validate(label, reviewed, duration) {
     if (!label || typeof label !== 'object' || Array.isArray(label)) throw Error('Invalid event annotation.');
-    if (typeof label.class !== 'string' || !label.class.trim()) throw Error('Choose a Class, or select Other and enter your own.');
-    const result = {class:label.class.trim().slice(0,2000), event_id:String(label.event_id || '').trim().slice(0,2000)};
+    if (reviewed && (typeof label.class !== 'string' || !label.class.trim())) throw Error('Choose a Class, or select Other and enter your own.');
+    const result = {class:String(label.class || '').trim().slice(0,2000), event_id:String(label.event_id || '').trim().slice(0,2000)};
     for (const [letter, standard] of Object.entries(groups)) {
       const source = label[letter] || {};
       if (typeof source !== 'object' || Array.isArray(source)) throw Error(`${letter} must be an object.`);
@@ -120,7 +120,7 @@
         if(label.time.end!==null&&label.time.end>frame.end+.000001)throw Error('Event end must be within this clip. Outcome evidence may occur later in the video.');
       }
       Object.assign(frame,{labels,reviewed:!!body.reviewed,annotator,updated_at:now()});
-      p.annotator = annotator; return frame;
+      p.annotator = annotator; p.completed=false; return frame;
     });
   }
   function waitEvent(target, event, action, timeout = 30000) {
@@ -198,7 +198,7 @@
       await waitEvent(video,'loadedmetadata',()=>{video.src=url;video.load();});
       if(!Number.isFinite(video.duration)||video.duration<=0||!video.videoWidth)throw Error('Could not read this video. Try an H.264 MP4 file.');
       const p={id:crypto.randomUUID().replaceAll('-',''),name:file.name,kind:'clips',annotator:annotator.trim().slice(0,200),
-        created_at:now(),status:'segmenting',duration:video.duration,width:video.videoWidth,height:video.videoHeight,
+        created_at:now(),status:'ready',completed:false,duration:video.duration,width:video.videoWidth,height:video.videoHeight,
         segmentCuts:[0,video.duration],frames:[],nextClipId:1};
       await new Promise((resolve,reject)=>{
         const tx=database.transaction(['projects','videos'],'readwrite');
@@ -230,6 +230,47 @@
       if(plan.affectedCount&&!allowReset)throw Error('Changing these boundaries affects existing annotations. Confirm resetting affected clips first.');
       p.frames=plan.clips;p.segmentCuts=plan.cuts;p.nextClipId=plan.nextClipId;p.status='ready';p.segmentation_updated_at=now();return p;
     });
+  }
+  async function addClip(id,start,end) {
+    return update(id,p=>{
+      if(p.kind!=='clips'||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>p.duration||end-start<.25)throw Error('Choose a clip of at least 0.25 seconds within the video.');
+      const number=p.nextClipId||p.frames.length+1;
+      p.frames.push({id:p.frames.length+1,clip_id:`clip_${String(number).padStart(3,'0')}`,start,end,labels:[],reviewed:false});
+      p.nextClipId=number+1;p.status='ready';p.completed=false;return p;
+    });
+  }
+  async function finishProject(id) {
+    return update(id,p=>{
+      if(!p.frames.length||p.frames.some(c=>!c.reviewed))throw Error('Save and complete every clip before finishing the project.');
+      p.completed=true;p.completed_at=now();return p;
+    });
+  }
+  async function backup(id) {
+    const p=await readProject(id);
+    if(p.kind!=='clips')throw Error('Progress backup is available for clip projects.');
+    downloadBlob(new Blob([JSON.stringify({format:'talktosim-progress',version:1,project:p},null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
+  }
+  async function importProgress(file,video,annotator) {
+    const data=JSON.parse(await file.text());
+    let source=data.format==='talktosim-progress'?data.project:null;
+    if(!source&&data.info?.annotation_type==='video_clip_semantics'&&data.videos?.length===1){
+      const v=data.videos[0];source={kind:'clips',name:v.source_name||data.info.source_video,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>({id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:c.reviewed,annotator:c.annotator,labels:data.events.filter(e=>e.clip_id===c.id)}))};
+    }
+    if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or complete clip dataset annotations.json.');
+    if(!video||video.name!==source.name)throw Error('Select the original video with the same filename as the progress file.');
+    if(!Number.isFinite(source.duration)||source.duration<=0)throw Error('Invalid source duration.');
+    const ids=new Set();
+    const frames=source.frames.map((c,i)=>{
+      if(!Number.isFinite(c.start)||!Number.isFinite(c.end)||c.start<0||c.end>source.duration||c.end<=c.start||typeof c.clip_id!=='string'||ids.has(c.clip_id)||!Array.isArray(c.labels)||c.labels.length>100)throw Error('Invalid clip in the progress file.');
+      ids.add(c.clip_id);const labels=c.labels.map(l=>validate(l,!!c.reviewed,source.duration));
+      for(const l of labels)if((l.time.start!==null&&l.time.start<c.start)||(l.time.end!==null&&l.time.end>c.end))throw Error('Event times are outside their clip.');
+      return {id:i+1,clip_id:c.clip_id,start:c.start,end:c.end,reviewed:!!c.reviewed,labels,annotator:String(c.annotator||annotator||'').slice(0,200),updated_at:c.updated_at||null};
+    });
+    const created=await createClipProject(video,annotator||source.annotator||'Doctor');
+    try{
+      if(Math.abs(created.duration-source.duration)>.1||created.width!==source.width||created.height!==source.height)throw Error('This video does not match the saved progress duration or dimensions.');
+      return await update(created.id,p=>{p.frames=frames;p.nextClipId=Math.max(frames.length,...frames.map(c=>Number(c.clip_id.match(/^clip_(\d+)$/)?.[1])||0))+1;p.completed=false;return p;});
+    }catch(e){await remove(created.id);throw e;}
   }
   function clipDataset(p,onlyReviewed) {
     const clips=p.frames.filter(c=>!onlyReviewed||c.reviewed);
@@ -326,6 +367,7 @@
   }
   async function prepareSubmission(id,{onlyReviewed=true,includeImages=false}={},progress) {
     const p=await readProject(id);if(p.status!=='ready')throw Error('Wait until extraction finishes.');
+    if(p.kind==='clips'&&!p.completed)throw Error('Finish the project before uploading to GitHub. Download progress to continue locally.');
     const data=dataset(p,onlyReviewed),json=value=>new Blob([JSON.stringify(value,null,2)],{type:'application/json'});
     const files=[{name:'annotations.json',blob:json(data)},{name:'events.json',blob:json(data.events)}];
     if(p.kind==='clips'){
@@ -358,5 +400,5 @@
       tx.oncomplete=resolve;tx.onabort=tx.onerror=()=>reject(tx.error);
     });jobs.delete(id);if(videoURLs.has(id)){URL.revokeObjectURL(videoURLs.get(id));videoURLs.delete(id);}
   }
-  window.frameStore={request,create,createClipProject,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
+  window.frameStore={request,create,createClipProject,addClip,finishProject,backup,importProgress,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
 })();

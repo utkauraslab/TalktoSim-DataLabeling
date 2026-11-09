@@ -141,7 +141,7 @@ test('submission preparation respects reviewed/image options and never downloads
 
 test('video-first projects persist source and cuts; confirmed clips export true clip annotations',async()=>{
   const h=harness(),p=await h.store.createClipProject(new File(['source-video-bytes'],'case.mp4'),'Doctor A');
-  assert.equal(p.kind,'clips');assert.equal(p.status,'segmenting');assert.equal(p.frames.length,0);
+  assert.equal(p.kind,'clips');assert.equal(p.status,'ready');assert.equal(p.frames.length,0);
   await h.store.saveCuts(p.id,[0,.5,1.5,2]);
   const reloaded=harness({db:h.db}),draft=await reloaded.store.request(`/api/projects/${p.id}`);
   assert.deepEqual(plain(draft.segmentCuts),[0,.5,1.5,2]);
@@ -153,8 +153,12 @@ test('video-first projects persist source and cuts; confirmed clips export true 
   assert.equal(data.info.version,'3.0');assert.equal(data.info.annotation_type,'video_clip_semantics');assert.equal(data.images,undefined);
   assert.equal(data.clips.length,1);assert.equal(data.clips[0].end,.5);assert.equal(data.events[0].clip_id,'clip_001');
   assert.equal(data.events[0].time.outcome_observed_at,2);assert.equal(data.events[0].Z.xxx,'Custom intention');
+  await assert.rejects(reloaded.store.prepareSubmission(p.id),/Finish the project/);
+  await reloaded.store.request(`/api/projects/${p.id}/frames/2`,{body:JSON.stringify({labels:[],reviewed:true,annotator:'Doctor'})});
+  await reloaded.store.request(`/api/projects/${p.id}/frames/3`,{body:JSON.stringify({labels:[],reviewed:true,annotator:'Doctor'})});
+  await reloaded.store.finishProject(p.id);
   const submission=await reloaded.store.prepareSubmission(p.id);
-  assert.equal(submission.unitType,'clips');assert.equal(submission.clipCount,1);
+  assert.equal(submission.unitType,'clips');assert.equal(submission.clipCount,3);
   assert.deepEqual(plain(submission.files.map(f=>f.name)),['annotations.json','events.json','clips.json']);
   await assert.rejects(reloaded.store.prepareSubmission(p.id,{includeImages:true}),/never uploaded/);
   await reloaded.store.exportData(p.id,'zip',false,undefined,{includeVideo:true});
@@ -218,4 +222,30 @@ test('upgrading a version-1 frame database preserves projects and saved images',
   const clip=await h.store.createClipProject(new File(['source'],'new.mp4'),'Doctor');assert.equal(clip.kind,'clips');
   await h.store.remove(clip.id);await assert.rejects(h.store.attachVideo(h.createVideo(),clip.id),/source video is missing/i);
   assert.equal((await h.store.request(`/api/projects/${id}`)).name,'legacy.mp4');
+});
+
+test('incremental clips overlap, save drafts, resume from disk and require project completion for upload',async()=>{
+  const h=harness({duration:14400}),video=new File(['long video'],'long.mp4');
+  const p=await h.store.createClipProject(video,'Doctor');
+  assert.equal(p.frames.length,0);
+  await h.store.addClip(p.id,42,60);await h.store.addClip(p.id,50,80);
+  let q=await h.store.request(`/api/projects/${p.id}`);
+  assert.deepEqual(plain(q.frames.map(c=>[c.start,c.end])),[[42,60],[50,80]]);
+  const draft=record();draft.class='';draft.time={start:42,end:60,outcome_observed_at:null};draft.O.evidence_interval=[null,null];
+  await save(h,q,[draft],false);
+  await h.store.backup(p.id);
+  const backup=h.downloads.at(-1).blob;
+  const restored=harness({duration:14400});
+  const r=await restored.store.importProgress(backup,video,'Doctor');
+  assert.notEqual(r.id,p.id);assert.equal(r.frames[0].labels[0].class,'');assert.equal(r.frames[0].reviewed,false);
+  assert.deepEqual(plain(r.frames.map(c=>[c.start,c.end])),[[42,60],[50,80]]);
+  await assert.rejects(restored.store.finishProject(r.id),/complete every clip/);
+  await assert.rejects(restored.store.prepareSubmission(r.id),/Finish the project/);
+  for(const c of r.frames)await restored.store.request(`/api/projects/${r.id}/frames/${c.id}`,{body:JSON.stringify({labels:[],reviewed:true,annotator:'Doctor'})});
+  await restored.store.finishProject(r.id);
+  assert.equal((await restored.store.prepareSubmission(r.id)).clipCount,2);
+  await restored.store.addClip(r.id,55,65);
+  await assert.rejects(restored.store.prepareSubmission(r.id),/Finish the project/);
+  await assert.rejects(restored.store.importProgress(backup,new File(['x'],'wrong.mp4'),'Doctor'),/same filename/);
+  await assert.rejects(restored.store.addClip(r.id,80,50),/Choose a clip/);
 });
