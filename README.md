@@ -2,9 +2,13 @@
 
 **Open the website: https://utkauraslab.github.io/TalktoSim-DataLabeling/**
 
-No installation, GitHub account, or repository clone is required. Open the link, choose a video, select a sampling interval, annotate, and export the image/JSON dataset. The English website includes the annotation example, Tension and other Class options, and custom fields in every X/Y/T/Z/O section.
+No installation, GitHub account, or repository clone is required. The website now uses a **clip-first workflow**: upload a video → drag the playhead and click Split → drag dividers to fine-tune clip boundaries → confirm clips → label each clip.
 
-Videos are processed on your device. Extracted images and annotations autosave in the current browser on the current device; export a dataset before clearing browser data or switching devices. Keep the tab open during frame extraction. H.264 MP4 is recommended; supported video formats and storage capacity depend on the browser.
+Doctors can preview clips, remove cuts, undo changes, and revisit segmentation with **Edit clips**. Unchanged intervals keep existing annotations; resetting annotations on affected clips requires confirmation. Class, Tension, Other/custom classes, X/Y/T/Z/O custom fields, local exports, and optional authorized GitHub uploads remain available. Existing frame projects remain readable.
+
+Clip exports contain `videos`, `clips`, `categories`, `annotations`, and `events`, with clip IDs and start/end times in original-video seconds. Local ZIPs include `clips.json` and labels, with the original video optionally included under `source/`. Separate trimmed MP4s are not generated. Clip GitHub submissions contain JSON only and never upload the original video.
+
+The source video, segmentation and labels autosave in this browser/device, subject to browser storage capacity. Download a backup before clearing browser data or switching devices. H.264 MP4 is recommended.
 
 The published website source is on the [`gh-pages` branch](https://github.com/utkauraslab/TalktoSim-DataLabeling/tree/gh-pages). The Python app below is the optional local edition for developers.
 
@@ -12,7 +16,7 @@ The published website source is on the [`gh-pages` branch](https://github.com/ut
 
 Open **Export / upload → Optional: upload labeling to GitHub**. Select the upload scope, optionally include frame images, explicitly check the authorization box, and provide a GitHub token restricted to this repository with **Contents: read and write**. The on-page help provides a token-creation link. The GitHub account must have repository write access; organization approval may be required. Local downloads need no authorization or GitHub account.
 
-Authorized submissions are committed to `main` under `labeling/annotator_UTC-time/`, for example `labeling/Alice_2026-11-03T23-30-45-123Z/`. Each folder contains `annotations.json`, `events.json`, and `submission.json`, plus `dataset.zip` if images were selected. Each uploaded file is limited to 50 MiB; larger datasets can be downloaded locally. Class, all custom fields, annotator and timestamps are preserved. Names support Unicode, with unsafe path characters replaced.
+Authorized submissions are committed to `main` under `labeling/annotator_UTC-time/`, for example `labeling/Alice_2026-11-03T23-30-45-123Z/`. Each folder contains `annotations.json`, `events.json`, and `submission.json`; clip projects also include `clips.json`. Legacy frame projects may include `dataset.zip` if images were selected. Each uploaded file is limited to 50 MiB; larger datasets can be downloaded locally. Class, all custom fields, annotator and timestamps are preserved. Names support Unicode, with unsafe path characters replaced.
 
 The repository is **public**, so the upload screen asks permission to publish the selected labels and optional images. The original video is never uploaded. Upload consent is off by default and resets for every attempt; without consent, no GitHub authorization or upload request is sent. Completing frames and downloading files never upload automatically. Tokens are used only in memory for the current upload, sent only to GitHub, and never stored in the browser or repository. Existing submission folders are never overwritten; concurrent commits preserve repository history.
 
