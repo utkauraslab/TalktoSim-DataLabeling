@@ -1,9 +1,9 @@
 {
   "event_id": "clip_001",
   "time": {
-    "start": 42.0,
-    "end": 49.5,
-    "outcome_observed_at": 52.0
+    "start": 0,
+    "end": 7.5,
+    "outcome_observed_at": 10
   },
   "X": {
     "instrument": "grasper"
@@ -24,7 +24,13 @@
   "O": {
     "observed_effect": "increased_anatomical_visibility",
     "goal_achieved": "partial",
-    "evidence_interval": [49.5, 52.0],
+    "evidence_interval": [
+      7.5,
+      10
+    ],
     "source": "video_and_expert"
-  }
+  },
+  "time_reference": "clip",
+  "clip_start": 42,
+  "clip_end": 49.5
 }

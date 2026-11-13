@@ -39,6 +39,7 @@
       request.onsuccess = () => {
         try {
           if (!request.result) throw Error('Project not found on this browser.');
+          clipModel.normalizeTiming(request.result);
           result = mutate(request.result); store.put(request.result);
         } catch (error) { failure = error; tx.abort(); }
       };
@@ -57,6 +58,7 @@
         await put(p);
       }
     }
+    if(p.kind==='clips'&&p.event_time_reference!=='clip')p=await update(id,p=>p);
     return p;
   }
   function validate(label, reviewed, duration) {
@@ -114,10 +116,12 @@
     return update(id,p => {
       const frame = p.frames[Number(fid)-1];
       if (p.status !== 'ready' || !frame) throw Error('Frame not found or extraction is not ready.');
-      const labels = body.labels.map(label => validate(label,!!body.reviewed,p.duration));
+      const limit=p.kind==='clips'?Number((p.duration-frame.start).toFixed(6)):p.duration;
+      const labels = body.labels.map(label => validate(label,!!body.reviewed,limit));
       if(p.kind==='clips')for(const label of labels){
-        if(label.time.start!==null&&label.time.start<frame.start-.000001)throw Error('Event start must be within this clip.');
-        if(label.time.end!==null&&label.time.end>frame.end+.000001)throw Error('Event end must be within this clip. Outcome evidence may occur later in the video.');
+        label.time_reference='clip';
+        if(label.time.start!==null&&label.time.start>clipModel.clipDuration(frame)+.000001)throw Error('Event start must be within this clip, measured from 0.');
+        if(label.time.end!==null&&label.time.end>clipModel.clipDuration(frame)+.000001)throw Error('Event end must be within this clip. Outcome evidence may occur later in the video.');
       }
       Object.assign(frame,{labels,reviewed:!!body.reviewed,annotator,updated_at:now()});
       p.annotator = annotator; p.completed=false; return frame;
@@ -198,7 +202,7 @@
       await waitEvent(video,'loadedmetadata',()=>{video.src=url;video.load();});
       if(!Number.isFinite(video.duration)||video.duration<=0||!video.videoWidth)throw Error('Could not read this video. Try an H.264 MP4 file.');
       const p={id:crypto.randomUUID().replaceAll('-',''),name:file.name,kind:'clips',annotator:annotator.trim().slice(0,200),
-        created_at:now(),status:'ready',completed:false,duration:video.duration,width:video.videoWidth,height:video.videoHeight,
+        created_at:now(),status:'ready',completed:false,event_time_reference:'clip',duration:video.duration,width:video.videoWidth,height:video.videoHeight,
         segmentCuts:[0,video.duration],frames:[],nextClipId:1};
       await new Promise((resolve,reject)=>{
         const tx=database.transaction(['projects','videos'],'readwrite');
@@ -254,16 +258,17 @@
     const data=JSON.parse(await file.text());
     let source=data.format==='talktosim-progress'?data.project:null;
     if(!source&&data.info?.annotation_type==='video_clip_semantics'&&data.videos?.length===1){
-      const v=data.videos[0];source={kind:'clips',name:v.source_name||data.info.source_video,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>({id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:c.reviewed,annotator:c.annotator,labels:data.events.filter(e=>e.clip_id===c.id)}))};
+      const v=data.videos[0];source={kind:'clips',event_time_reference:data.info.event_time_reference,name:v.source_name||data.info.source_video,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>({id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:c.reviewed,annotator:c.annotator,labels:data.events.filter(e=>e.clip_id===c.id)}))};
     }
     if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or complete clip dataset annotations.json.');
     if(!video||video.name!==source.name)throw Error('Select the original video with the same filename as the progress file.');
     if(!Number.isFinite(source.duration)||source.duration<=0)throw Error('Invalid source duration.');
+    source=clipModel.normalizeTiming(source);
     const ids=new Set();
     const frames=source.frames.map((c,i)=>{
       if(!Number.isFinite(c.start)||!Number.isFinite(c.end)||c.start<0||c.end>source.duration||c.end<=c.start||typeof c.clip_id!=='string'||ids.has(c.clip_id)||!Array.isArray(c.labels)||c.labels.length>100)throw Error('Invalid clip in the progress file.');
-      ids.add(c.clip_id);const labels=c.labels.map(l=>validate(l,!!c.reviewed,source.duration));
-      for(const l of labels)if((l.time.start!==null&&l.time.start<c.start)||(l.time.end!==null&&l.time.end>c.end))throw Error('Event times are outside their clip.');
+      ids.add(c.clip_id);const labels=c.labels.map(l=>({...validate(l,!!c.reviewed,Number((source.duration-c.start).toFixed(6))),time_reference:'clip'}));
+      for(const l of labels)if((l.time.start!==null&&l.time.start>clipModel.clipDuration(c))||(l.time.end!==null&&l.time.end>clipModel.clipDuration(c)))throw Error('Event times are outside their clip.');
       return {id:i+1,clip_id:c.clip_id,start:c.start,end:c.end,reviewed:!!c.reviewed,labels,annotator:String(c.annotator||annotator||'').slice(0,200),updated_at:c.updated_at||null};
     });
     const created=await createClipProject(video,annotator||source.annotator||'Doctor');
@@ -277,7 +282,7 @@
     if(!clips.length)throw Error('No clips to export. Complete a clip or export all clips.');
     const categories=[...new Set(clips.flatMap(c=>c.labels.map(l=>l.class)))].sort().map((name,i)=>({id:i+1,name}));
     const ids=new Map(categories.map(c=>[c.name,c.id]));
-    const data={info:{description:p.name,version:'3.0',date_created:p.created_at,annotation_type:'video_clip_semantics',time_unit:'seconds',source_video:p.name},
+    const data={info:{description:p.name,version:'3.1',date_created:p.created_at,annotation_type:'video_clip_semantics',time_unit:'seconds',event_time_reference:'clip',clip_boundary_time_reference:'source_video',source_video:p.name},
       videos:[{id:p.id,file_name:`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,source_name:p.name,duration_seconds:p.duration,width:p.width,height:p.height}],clips:[],categories,annotations:[],events:[]};
     for(const c of clips){
       data.clips.push({id:c.clip_id,video_id:p.id,start:c.start,end:c.end,duration_seconds:Number((c.end-c.start).toFixed(6)),reviewed:c.reviewed,annotator:c.annotator||'',updated_at:c.updated_at||null});
@@ -353,7 +358,7 @@
     if(p.kind==='clips'){
       async function* clipEntries(){
         yield ['annotations.json',json(data)];yield ['events.json',json(data.events)];yield ['clips.json',json(data.clips)];
-        yield ['README.txt',new Blob(['Video clip annotation dataset\nClips are time ranges in the source video, in seconds. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nSource video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
+        yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nSource video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
         if(options.includeVideo){const source=await run('videos','readonly',store=>store.get(id));if(!source)throw Error('Source video unavailable.');yield [`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,source.blob];}
       }
       downloadBlob(await zip(clipEntries(),progress),`clip-dataset-${id.slice(0,8)}.zip`);return;

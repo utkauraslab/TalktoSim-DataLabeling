@@ -93,7 +93,8 @@ async function poll() {
   } catch (err) { toast(err.message); pollTimer = setTimeout(poll, 3000); }
 }
 function makeGroup(raw = {}) {
-  const value = normalizeLabel(raw);
+  const value = normalizeLabel(structuredClone(raw));
+  if(isClipProject()&&!Object.hasOwn(raw,'time'))value.time=clipModel.timingDefaults(project.frames[current]);
   const group = document.createElement('div'); group.className = 'label-group';
   const head = document.createElement('div'); head.className = 'group-header';
   const title = document.createElement('span'); title.textContent = 'EVENT RECORD';
@@ -102,8 +103,8 @@ function makeGroup(raw = {}) {
   function addInput(parent, [path, name, placeholder, type]) {
     const label = document.createElement('label'); label.textContent = name;
     const input = document.createElement('input'); input.dataset.key = path;
-    input.type = type || 'text'; input.value = pathValue(value, path) ?? ''; input.placeholder = placeholder; input.maxLength = 2000;
-    if (type === 'number') { input.min = isClipProject()&&['time.start','time.end'].includes(path)?String(project.frames[current].start):'0'; input.max = String(isClipProject()&&['time.start','time.end'].includes(path)?project.frames[current].end:project.duration); input.step = 'any'; }
+    input.type = type || 'text'; input.value = pathValue(value, path) ?? ''; input.placeholder = isClipProject()&&path.startsWith('time.')?String(clipModel.timingDefaults(project.frames[current])[path.split('.')[1]]):placeholder; input.maxLength = 2000;
+    if (type === 'number') { input.min='0'; input.max=String(isClipProject()?(['time.start','time.end'].includes(path)?clipModel.clipDuration(project.frames[current]):Number((project.duration-project.frames[current].start).toFixed(6))):project.duration); input.step='any'; }
     label.append(input); parent.append(label);
   }
   const identity = document.createElement('div'); identity.className = 'event-fields';
@@ -123,7 +124,7 @@ function makeGroup(raw = {}) {
   const other = document.createElement('option'); other.value = ''; other.textContent = 'Other — enter your own'; other.dataset.custom = 'true'; classSelect.append(other);
   classSelect.value = value.class || '';
   classLabel.append(classSelect); identity.append(classLabel);
-  addInput(identity, ['event_id', 'Event ID', `frame_${String(current + 1).padStart(6, '0')}_event_01`]);
+  addInput(identity, ['event_id', 'Event ID', isClipProject()?project.frames[current].clip_id:`frame_${String(current + 1).padStart(6, '0')}_event_01`]);
   const customClassLabel = document.createElement('label'); customClassLabel.className = 'custom-class-label'; customClassLabel.textContent = 'Custom class *'; customClassLabel.hidden = true;
   const customClass = document.createElement('input'); customClass.className = 'custom-class-input'; customClass.placeholder = 'Enter your own class'; customClass.maxLength = 2000;
   customClassLabel.append(customClass); identity.append(customClassLabel);
@@ -132,7 +133,7 @@ function makeGroup(raw = {}) {
     if (!customClassLabel.hidden) customClass.focus();
     if(isClipProject()&&(classSelect.value||classSelect.selectedOptions[0]?.dataset.custom)){
       const clip=project.frames[current],index=[...$('labels').children].indexOf(group);
-      for(const [path,text]of [['event_id',clip.clip_id+(index>0?`_event_${index+1}`:'')],['time.start',clip.start],['time.end',clip.end]]){
+      for(const [path,text]of [['event_id',clip.clip_id+(index>0?`_event_${index+1}`:'')],['time.start',0],['time.end',clipModel.clipDuration(clip)],['time.outcome_observed_at',clipModel.clipDuration(clip)]]){
         const field=group.querySelector(`[data-key="${path}"]`);if(field&&field.value==='')field.value=text;
       }
     }
@@ -142,7 +143,8 @@ function makeGroup(raw = {}) {
     const section = document.createElement('div'); section.className = 'event-section';
     const heading = document.createElement('h3');
     const badge = document.createElement('span'); badge.className = 'section-letter'; badge.textContent = letter;
-    heading.append(badge, document.createTextNode(title)); section.append(heading);
+    heading.append(badge, document.createTextNode(letter==='TIME'&&isClipProject()?'Event timing · clip seconds':title)); section.append(heading);
+    if(letter==='TIME'&&isClipProject()){const hint=document.createElement('p');hint.className='hint';hint.textContent=`0 = clip start · Clip length ${clipModel.clipDuration(project.frames[current])} s. Timing is prefilled and editable; verify the outcome time. Outcome and evidence may extend beyond this clip, measured from the same 0.`;section.append(hint);}
     const content = document.createElement('div'); content.className = 'event-fields';
     for (const field of inputs) addInput(content, field);
     section.append(content);
@@ -178,7 +180,7 @@ function makeCustomField(letter, name = '', value = '') {
 }
 function collect() {
   return [...$('labels').children].map(group => {
-    const label = {time:{}, X:{}, Y:{}, T:{}, Z:{}, O:{evidence_interval:[null,null]}};
+    const label = {...(isClipProject()?{time_reference:'clip'}:{}),time:{}, X:{}, Y:{}, T:{}, Z:{}, O:{evidence_interval:[null,null]}};
     const classSelect = group.querySelector('.class-select');
     label.class = classSelect.selectedOptions[0]?.dataset.custom ? group.querySelector('.custom-class-input').value.trim() : classSelect.value;
     for (const input of group.querySelectorAll('input[data-key]')) {
@@ -244,7 +246,7 @@ function renderFrame() {
   $('frameNumber').textContent=`${title} ${current+1} / ${project.frames.length}`;
   $('frameState').textContent=frame.reviewed?'✓ Reviewed':'Unreviewed / Draft';
   $('annotationHeading').textContent=`${title} annotations`;$('completeFrame').textContent=isClipProject()?'✓ Save & complete this clip':`✓ Complete & next ${unit()}`;
-  $('viewerHint').textContent=isClipProject()?'Each label belongs to this clip. Enable Review full video to inspect later outcomes.':'Legacy frame annotation project. Images retain their original resolution.';
+  $('viewerHint').textContent=isClipProject()?'Label times start at 0 for this clip. The video player and clip boundaries use source-video time. Review full video to inspect later outcomes; subtract the clip start to enter their clip-relative times.':'Legacy frame annotation project. Images retain their original resolution.';
   $('labels').replaceChildren(...(frame.labels.length?frame.labels:[{}]).map(makeGroup));$('saveStatus').textContent='Saved';$('copyPrevious').disabled=current===0;
   const indices=visibleIndices(),pos=indices.indexOf(current);$('prevFrame').disabled=pos<=0;$('nextFrame').disabled=pos===indices.length-1;
   $('filmstrip').replaceChildren(...indices.slice(Math.max(0,pos-4),pos+8).map(i=>{
@@ -270,10 +272,10 @@ async function complete() {
 $('newProject').onclick = () => guarded(async () => { clearTimeout(pollTimer); project = null; localStorage.removeItem('framelab-project'); $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); });
 $('backFromError').onclick = () => $('newProject').click();
 $('prevFrame').onclick = () => move(-1); $('nextFrame').onclick = () => move(1);
-$('addLabel').onclick = () => { $('labels').append(makeGroup()); $('labels').lastChild.querySelector('input').focus(); };
+$('addLabel').onclick = () => { $('labels').append(makeGroup()); $('labels').lastChild.querySelector('input').focus();changed(); };
 $('copyPrevious').onclick = () => {
   const previous=structuredClone(project.frames[current-1].labels);
-  if(isClipProject())previous.forEach((label,i)=>{label.event_id=project.frames[current].clip_id+(i?`_event_${i+1}`:'');label.time={start:project.frames[current].start,end:project.frames[current].end,outcome_observed_at:null};label.O.evidence_interval=[null,null];});
+  if(isClipProject())previous.forEach((label,i)=>{label.event_id=project.frames[current].clip_id+(i?`_event_${i+1}`:'');label.time=clipModel.timingDefaults(project.frames[current]);label.time_reference='clip';label.O.evidence_interval=[null,null];});
   $('labels').replaceChildren(...(previous.length?previous:[{}]).map(makeGroup));changed();
 };
 $('saveClip').onclick=()=>guarded(async()=>{revision++;await save();toast('This clip is saved locally. You can safely return later.');});
@@ -411,12 +413,12 @@ timeline=new ClipTimeline({onConfirm:async p=>{await openProject(p.id);current=p
 let exampleRecord;
 async function showExample() {
   try {
-    exampleRecord ??= await api('./static/example.json');
+    exampleRecord ??= await api('./static/example.json?v=clip-time-1');
     $('exampleJson').textContent = JSON.stringify(exampleRecord, null, 2);
     $('exampleDialog').showModal();
   } catch (err) { toast(err.message); }
 }
 document.querySelectorAll('.example-trigger').forEach(button => button.onclick = showExample);
 $('downloadExample').onclick = () => {
-  const a = document.createElement('a'); a.href = './static/example.json'; a.download = 'annotation-example.json'; a.click();
+  const a = document.createElement('a'); a.href = './static/example.json?v=clip-time-1'; a.download = 'annotation-example.json'; a.click();
 };

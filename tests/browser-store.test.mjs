@@ -11,6 +11,8 @@ import {IDBFactory,IDBKeyRange} from 'fake-indexeddb';
 const source=readFileSync(new URL('../static/browser-store.js',import.meta.url),'utf8');
 const clipSource=readFileSync(new URL('../static/clip-model.js',import.meta.url),'utf8');
 const example=JSON.parse(readFileSync(new URL('../static/example.json',import.meta.url),'utf8'));
+// Frame fixtures keep their original source-video timing contract.
+delete example.time_reference;delete example.clip_start;delete example.clip_end;
 const pause=()=>new Promise(resolve=>setTimeout(resolve,2));
 function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
   const downloads=[],urls=new Map(),locks=new Set(),sampled=[];
@@ -150,7 +152,7 @@ test('video-first projects persist source and cuts; confirmed clips export true 
   const label=record();label.time.end=.5;await save(reloaded,ready,[label]);
   await reloaded.store.exportData(p.id,'json',true);
   const data=JSON.parse(await reloaded.downloads.at(-1).blob.text());
-  assert.equal(data.info.version,'3.0');assert.equal(data.info.annotation_type,'video_clip_semantics');assert.equal(data.images,undefined);
+  assert.equal(data.info.version,'3.1');assert.equal(data.info.annotation_type,'video_clip_semantics');assert.equal(data.images,undefined);
   assert.equal(data.clips.length,1);assert.equal(data.clips[0].end,.5);assert.equal(data.events[0].clip_id,'clip_001');
   assert.equal(data.events[0].time.outcome_observed_at,2);assert.equal(data.events[0].Z.xxx,'Custom intention');
   await assert.rejects(reloaded.store.prepareSubmission(p.id),/Finish the project/);
@@ -195,8 +197,8 @@ test('clip event action times stay inside its clip while outcome evidence may oc
   await save(h,ready,[record()]);
   const outside=record();outside.time.end=1.5;await assert.rejects(save(h,ready,[outside]),/within this clip/);
   const first=await h.store.request(`/api/projects/${p.id}`);assert.equal(first.frames[0].labels[0].time.end,1);
-  const second=record();second.time.start=0;second.time.end=2;
-  await assert.rejects(h.store.request(`/api/projects/${p.id}/frames/2`,{body:JSON.stringify({labels:[second],reviewed:true,annotator:'Doctor'})}),/within this clip/);
+  const second=record();second.time.start=0;second.time.end=2;second.time.outcome_observed_at=2;
+  await assert.rejects(h.store.request(`/api/projects/${p.id}/frames/2`,{body:JSON.stringify({labels:[second],reviewed:true,annotator:'Doctor'})}),/within this clip|Times must be numeric/);
 });
 
 test('partitions reject gaps, duplicates, short clips and non-numeric cuts; short videos can remain one clip',()=>{
@@ -231,7 +233,7 @@ test('incremental clips overlap, save drafts, resume from disk and require proje
   await h.store.addClip(p.id,42,60);await h.store.addClip(p.id,50,80);
   let q=await h.store.request(`/api/projects/${p.id}`);
   assert.deepEqual(plain(q.frames.map(c=>[c.start,c.end])),[[42,60],[50,80]]);
-  const draft=record();draft.class='';draft.time={start:42,end:60,outcome_observed_at:null};draft.O.evidence_interval=[null,null];
+  const draft=record();draft.class='';draft.time={start:0,end:18,outcome_observed_at:null};draft.O.evidence_interval=[null,null];
   await save(h,q,[draft],false);
   await h.store.backup(p.id);
   const backup=h.downloads.at(-1).blob;
@@ -248,4 +250,37 @@ test('incremental clips overlap, save drafts, resume from disk and require proje
   await assert.rejects(restored.store.prepareSubmission(r.id),/Finish the project/);
   await assert.rejects(restored.store.importProgress(backup,new File(['x'],'wrong.mp4'),'Doctor'),/same filename/);
   await assert.rejects(restored.store.addClip(r.id,80,50),/Choose a clip/);
+});
+
+test('clip-relative defaults, save, export and backup round trips use one explicit time reference',async()=>{
+  const h=harness({duration:100}),video=new File(['v'],'relative.mp4');
+  const p=await h.store.createClipProject(video,'Doctor');await h.store.addClip(p.id,42,49.5);
+  assert.deepEqual(plain(h.model.timingDefaults({start:42,end:49.5})),{start:0,end:7.5,outcome_observed_at:7.5});
+  const label=record();label.time={start:0,end:7.5,outcome_observed_at:10};label.O.evidence_interval=[7.5,10];
+  const saved=await save(h,p,[label]);assert.equal(saved.labels[0].time_reference,'clip');
+  await h.store.exportData(p.id,'json',true);
+  const exported=h.downloads.at(-1).blob,data=JSON.parse(await exported.text());
+  assert.equal(data.info.event_time_reference,'clip');assert.equal(data.info.clip_boundary_time_reference,'source_video');
+  assert.equal(data.events[0].clip_start,42);assert.equal(data.events[0].clip_end,49.5);
+  assert.deepEqual(data.events[0].time,label.time);assert.deepEqual(data.events[0].O.evidence_interval,[7.5,10]);
+  const newBrowser=harness({duration:100}),imported=await newBrowser.store.importProgress(exported,video,'Doctor');
+  assert.deepEqual(plain(imported.frames[0].labels[0].time),label.time);
+  await h.store.backup(p.id);const fromBackup=await newBrowser.store.importProgress(h.downloads.at(-1).blob,video,'Doctor');
+  assert.deepEqual(plain(fromBackup.frames[0].labels[0].time),label.time);
+  const invalid=structuredClone(label);invalid.time.start=-1;await assert.rejects(save(h,p,[invalid]),/Times must be numeric/);
+  invalid.time.start=0;invalid.time.end=8;await assert.rejects(save(h,p,[invalid]),/within this clip/);
+  invalid.time.end=7.5;invalid.time.outcome_observed_at=60;await assert.rejects(save(h,p,[invalid]),/Times must be numeric/);
+});
+
+test('legacy source-video times migrate once on reopen and old file import without changing clip boundaries',async()=>{
+  const h=harness({duration:100}),video=new File(['v'],'legacy-clips.mp4');
+  const p=await h.store.createClipProject(video,'Doctor');
+  const oldLabel=record();oldLabel.time={start:42,end:49.5,outcome_observed_at:52};oldLabel.O.evidence_interval=[49.5,52];
+  const old={...p,frames:[{id:1,clip_id:'clip_001',start:42,end:49.5,labels:[oldLabel],reviewed:true}],nextClipId:2};delete old.event_time_reference;
+  await new Promise((resolve,reject)=>{const r=h.db.open('talktosim-framelab-v1',2);r.onsuccess=()=>{const tx=r.result.transaction('projects','readwrite');tx.objectStore('projects').put(old);tx.oncomplete=()=>{r.result.close();resolve();};tx.onerror=()=>reject(tx.error);};});
+  const read=()=>h.store.request(`/api/projects/${p.id}`);
+  for(let i=0;i<2;i++){const migrated=await read();assert.equal(migrated.frames[0].start,42);assert.equal(migrated.frames[0].reviewed,true);assert.deepEqual(plain(migrated.frames[0].labels[0].time),{start:0,end:7.5,outcome_observed_at:10});assert.deepEqual(plain(migrated.frames[0].labels[0].O.evidence_interval),[7.5,10]);}
+  const restored=await h.store.importProgress(new Blob([JSON.stringify({format:'talktosim-progress',project:old})]),video,'Doctor');
+  assert.deepEqual(plain(restored.frames[0].labels[0].time),{start:0,end:7.5,outcome_observed_at:10});
+  assert.equal(restored.frames[0].labels[0].Z.xxx,'Custom intention');
 });

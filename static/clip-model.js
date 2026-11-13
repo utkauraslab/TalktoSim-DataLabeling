@@ -26,5 +26,22 @@
     const affected=old.filter(c=>!retained.has(c.clip_id)&&(c.labels.length||c.reviewed));
     return {cuts:valid,clips,nextClipId:next,affectedCount:affected.length};
   }
-  window.clipModel={normalize,plan,minClip:MIN_CLIP,maxClips:MAX_CLIPS};
+  const round=t=>Number(t.toFixed(6));
+  const clipDuration=clip=>round(clip.end-clip.start);
+  const timingDefaults=clip=>({start:0,end:clipDuration(clip),outcome_observed_at:clipDuration(clip)});
+  // Unmarked data from earlier releases used source-video seconds. Convert once.
+  function normalizeTiming(project){
+    if(project.kind!=='clips')return project;
+    const reference=project.event_time_reference;
+    for(const clip of project.frames||[])for(const label of clip.labels||[]){
+      if((label.time_reference||reference)!=='clip'){
+        const relative=t=>typeof t==='number'&&Number.isFinite(t)?round(t-clip.start):t;
+        if(label.time)for(const key of ['start','end','outcome_observed_at'])label.time[key]=relative(label.time[key]);
+        if(Array.isArray(label.O?.evidence_interval))label.O.evidence_interval=label.O.evidence_interval.map(relative);
+      }
+      label.time_reference='clip';
+    }
+    project.event_time_reference='clip';return project;
+  }
+  window.clipModel={normalize,plan,clipDuration,timingDefaults,normalizeTiming,minClip:MIN_CLIP,maxClips:MAX_CLIPS};
 })();
