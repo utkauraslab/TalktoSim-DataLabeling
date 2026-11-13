@@ -8,7 +8,7 @@ No installation, GitHub account, or repository clone is required. Upload a video
 
 Click **Finish project** after all added clips are reviewed to enable optional authorized GitHub upload. Adding clips or editing labels returns the project to work in progress. Local downloads remain available at any time. Class, Tension, Other/custom classes and X/Y/T/Z/O custom fields remain available. Existing frame projects remain readable.
 
-Clip exports contain `videos`, `clips`, `categories`, `annotations`, and `events`, with clip IDs and start/end times in original-video seconds. Local ZIPs include `clips.json` and labels, with the original video optionally included under `source/`. Separate trimmed MP4s are not generated. Clip GitHub submissions contain JSON only and never upload the original video.
+Clip exports contain `videos`, `clips`, `categories`, `annotations`, and `events`. Clip boundaries remain in original-video seconds. Event `time` and `O.evidence_interval` use seconds from clip start (0), with explicit time-reference metadata in schema 3.1. New event timing defaults to Start = 0, End = clip duration, and Outcome observed at = clip duration; all remain editable. Older source-video event times are converted once when reopening or importing. Local ZIPs include `clips.json` and labels, with the original video optionally included under `source/`. Separate trimmed MP4s are not generated. Clip GitHub submissions contain JSON only and never upload the original video.
 
 The source video, segmentation and labels autosave in this browser/device, subject to browser storage capacity. Download a backup before clearing browser data or switching devices. H.264 MP4 is recommended.
 
