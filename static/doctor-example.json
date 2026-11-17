@@ -1,0 +1,66 @@
+{
+  "clip_id": "clip_001",
+  "clip_start": 42,
+  "clip_end": 49.5,
+  "time_reference": "clip",
+  "time": {
+    "start": 0,
+    "end": 7.5
+  },
+  "action": "Tension",
+  "tool": "Grasper",
+  "tissue": "Gallbladder",
+  "goal_audio": {
+    "file_name": "audio/clip_001_goal.webm",
+    "mime_type": "audio/webm"
+  },
+  "outcome_audio": {
+    "file_name": "audio/clip_001_outcome.webm",
+    "mime_type": "audio/webm"
+  },
+  "region": {
+    "timestamp": 3,
+    "width": 1280,
+    "height": 720,
+    "goal": [
+      [
+        [
+          0.2,
+          0.3
+        ],
+        [
+          0.55,
+          0.35
+        ],
+        [
+          0.5,
+          0.7
+        ],
+        [
+          0.25,
+          0.65
+        ]
+      ]
+    ],
+    "avoid": [
+      [
+        [
+          0.7,
+          0.3
+        ],
+        [
+          0.9,
+          0.35
+        ],
+        [
+          0.85,
+          0.7
+        ]
+      ]
+    ]
+  },
+  "frame_image": {
+    "file_name": "images/clip_001.jpg",
+    "mime_type": "image/jpeg"
+  }
+}

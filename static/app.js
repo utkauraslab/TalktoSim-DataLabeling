@@ -438,12 +438,12 @@ doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onB
 let exampleRecord;
 async function showExample() {
   try {
-    exampleRecord ??= await api('./static/example.json?v=clip-time-1');
+    exampleRecord ??= await api('./static/doctor-example.json?v=welcome-labels-1');
     $('exampleJson').textContent = JSON.stringify(exampleRecord, null, 2);
     $('exampleDialog').showModal();
   } catch (err) { toast(err.message); }
 }
 document.querySelectorAll('.example-trigger').forEach(button => button.onclick = showExample);
 $('downloadExample').onclick = () => {
-  const a = document.createElement('a'); a.href = './static/example.json?v=clip-time-1'; a.download = 'annotation-example.json'; a.click();
+  const a = document.createElement('a'); a.href = './static/doctor-example.json?v=welcome-labels-1'; a.download = 'annotation-example.json'; a.click();
 };
