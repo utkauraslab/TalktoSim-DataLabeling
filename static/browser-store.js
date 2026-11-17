@@ -103,7 +103,7 @@
       const items = await run('projects','readonly',store => store.getAll());
       return Promise.all(items.sort((a,b) => b.created_at.localeCompare(a.created_at)).map(async item => {
         const p = await readProject(item.id);
-        return Object.fromEntries(['id','name','status','created_at','annotator'].map(key => [key,p[key]]));
+        return Object.fromEntries(['id','name','status','created_at','annotator','kind'].map(key => [key,p[key]]));
       }));
     }
     const match = path.match(/^\/api\/projects\/([a-f0-9]+)(?:\/frames\/(\d+))?$/);
@@ -236,6 +236,16 @@
     });
   }
   async function saveVocabulary(id,key,value){if(!['action','tool','tissue'].includes(key)||typeof value!=='string'||!value.trim()||value.length>200)throw Error('Invalid custom option.');return update(id,p=>{p.vocabulary||={};p.vocabulary[key]=[...new Set([...(p.vocabulary[key]||[]),value.trim()])];return p;});}
+  async function reconnectLegacy(id,file){
+    const old=await readProject(id);
+    if(old.kind==='clips')throw Error('This project already uses the clip workspace.');
+    if(!file||file.name!==old.name)throw Error('Choose the original video with the same filename as this project.');
+    const p=await createClipProject(file,old.annotator||'Doctor');
+    try{
+      if(Math.abs(p.duration-old.duration)>.1||p.width!==old.width||p.height!==old.height)throw Error('This video does not match the previous project duration or dimensions.');
+      return await update(p.id,p=>{p.annotation_interface='doctor_v1';p.legacy_project_id=old.id;return p;});
+    }catch(e){await remove(p.id);throw e;}
+  }
   async function enableDoctor(id){return update(id,p=>{p.annotation_interface='doctor_v1';p.status='ready';return p;});}
   async function media(id,name){return (await run('images','readonly',s=>s.get(`${id}/${name}`)))?.blob;}
   function mediaName(clip,type,blob){
@@ -472,5 +482,5 @@
       tx.oncomplete=resolve;tx.onabort=tx.onerror=()=>reject(tx.error);
     });jobs.delete(id);if(videoURLs.has(id)){URL.revokeObjectURL(videoURLs.get(id));videoURLs.delete(id);}
   }
-  window.frameStore={request,create,createClipProject,enableDoctor,saveVocabulary,saveDoctor,deleteClip,media,addClip,finishProject,backup,importProgress,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
+  window.frameStore={request,create,createClipProject,enableDoctor,reconnectLegacy,saveVocabulary,saveDoctor,deleteClip,media,addClip,finishProject,backup,importProgress,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
 })();

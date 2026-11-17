@@ -324,3 +324,12 @@ test('PDF region model rejects invalid polygons and only Tension / Exposure acti
   for(const points of [[[0,0],[1,1]],[[0,0],[.5,.5],[1,1]],[[0,0],[2,0],[0,1]]])assert.throws(()=>m.validate({...a,region:{...a.region,goal:[points]}},5));
   assert.throws(()=>m.validate({...a,region:{...a.region,timestamp:7}},5));
 });
+
+test('legacy frame projects reconnect to the PDF clip workspace without altering original frames or labels',async()=>{
+  const h=harness(),old=await create(h),label=record();await save(h,old,[label]);
+  const created=await h.store.reconnectLegacy(old.id,new File(['source-video'],'sample.mp4'));
+  assert.equal(created.kind,'clips');assert.equal(created.annotation_interface,'doctor_v1');assert.equal(created.legacy_project_id,old.id);assert.equal(created.frames.length,0);
+  const original=await h.store.request(`/api/projects/${old.id}`);assert.equal(original.frames.length,4);assert.deepEqual(plain(original.frames[0].labels),[label]);
+  await h.store.exportData(old.id,'json',false);assert.equal(JSON.parse(await h.downloads.at(-1).blob.text()).images.length,4);
+  await assert.rejects(h.store.reconnectLegacy(old.id,new File(['v'],'wrong.mp4')),/same filename/);
+});

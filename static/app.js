@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 let project = null, current = 0, revision = 0, savedRevision = 0, saving = null;
-let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false, timeline, doctorWorkspace;
+let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false, timeline, doctorWorkspace, legacyProject;
 const isClipProject=()=>project?.kind==='clips';
 const unit=()=>isClipProject()?'clip':'frame';
 const eventSections = [
@@ -50,7 +50,7 @@ async function refreshProjects() {
     const row=document.createElement('div');row.className='project-row';
     const button = document.createElement('button'); button.className = 'project-item' + (project?.id === p.id ? ' current' : '');
     button.append(document.createTextNode(p.name)); const detail = document.createElement('small');
-    detail.textContent = `${{ready:'Ready to annotate', segmenting:'Continue splitting', processing:'Extracting frames', error:'Needs attention'}[p.status]} · ${new Date(p.created_at).toLocaleDateString('en-US')}`;
+    detail.textContent = `${p.kind==='clips'?{ready:'Ready to annotate', segmenting:'Continue splitting', processing:'Extracting frames', error:'Needs attention'}[p.status]:'Legacy frame project'} · ${new Date(p.created_at).toLocaleDateString('en-US')}`;
     button.title=p.name;button.append(detail);button.onclick=()=>guarded(()=>openProject(p.id));
     const remove=document.createElement('button');remove.type='button';remove.className='project-delete';remove.textContent='Delete';remove.title=`Delete ${p.name}`;remove.setAttribute('aria-label',`Delete project ${p.name}`);
     remove.disabled=p.status==='processing';
@@ -80,18 +80,10 @@ async function openProject(id) {
   localStorage.setItem('framelab-project', id); $('breadcrumb').textContent = project.name;
   await refreshProjects();
   if(project.kind==='clips'){project=await frameStore.enableDoctor(project.id);$('editorAnnotator').value=project.annotator;show('doctorWorkspace');await doctorWorkspace.open(project);return;}
-  if(project.kind==='clips'&&(project.status==='segmenting'||!project.frames.length)){await openSegmentation(project);return;}
-  if (project.status !== 'ready') { show('processing'); poll(); return; }
-  show('editor'); $('projectName').textContent = project.name;
-  $('projectInfo').textContent = isClipProject()
-    ? `${project.frames.length} clips · Duration ${formatTime(project.duration)} · ${project.width} × ${project.height}`
-    : `${project.frames.length} frames · Legacy frame project · ${project.width} × ${project.height}`;
-  $('editorAnnotator').value = project.annotator;$('onlyPending').checked = false;
-  current = Math.max(0, project.frames.findIndex(f => !f.reviewed));
-  $('editClips').hidden=!isClipProject();$('downloadProgress').hidden=!isClipProject();$('finishProject').hidden=!isClipProject();$('saveClip').hidden=!isClipProject();$('legacyViewer').hidden=isClipProject();$('clipViewer').hidden=!isClipProject();$('clipJumpLabel').hidden=!isClipProject();
-  if(isClipProject())await frameStore.attachVideo($('clipVideo'),project.id);
-  renderFrame();
+  if(project.status!=='ready'){show('processing');poll();return;}
+  await openLegacyGate(project);
 }
+
 async function poll() {
   try {
     project = await api(`/api/projects/${project.id}`);
@@ -284,6 +276,21 @@ async function complete() {
     if (!isClipProject() && next >= 0) {current = next; renderFrame();} else { renderFrame(); toast('Saved locally. Click Add a clip to continue, or Finish project when you are done.'); }
   });
 }
+async function openLegacyGate(p){
+  legacyProject=p;project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');
+  $('legacyProjectName').textContent=p.name;$('legacySourceVideo').value='';$('legacyOpenStatus').textContent='';$('legacyProjectDialog').showModal();await refreshProjects();
+}
+$('openLegacyVideo').onclick=async()=>{
+  if(uploading)return;uploading=true;$('openLegacyVideo').disabled=true;
+  try{
+    $('legacyOpenStatus').textContent='Opening the original video…';
+    const p=await frameStore.reconnectLegacy(legacyProject.id,$('legacySourceVideo').files[0]);
+    uploading=false;$('legacyProjectDialog').close();await openProject(p.id);
+  }catch(e){$('legacyOpenStatus').textContent=e.message;}finally{uploading=false;$('openLegacyVideo').disabled=false;}
+};
+for(const [id,format]of [['downloadLegacyJson','json'],['downloadLegacyZip','zip']])$(id).onclick=async()=>{
+  const b=$(id);b.disabled=true;try{await frameStore.exportData(legacyProject.id,format,false);$('legacyOpenStatus').textContent='Previous project exported. Check your downloads.';}catch(e){$('legacyOpenStatus').textContent=e.message;}finally{b.disabled=false;}
+};
 async function showProjects(){clearTimeout(pollTimer);project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}
 $('newProject').onclick=()=>guarded(showProjects);
 $('backFromError').onclick = () => $('newProject').click();
@@ -426,7 +433,7 @@ $('deleteProject').onclick = () => guarded(async () => {
 });
 timeline=new ClipTimeline({onConfirm:async p=>{await openProject(p.id);current=project.frames.length-1;renderFrame();},onCancel:async p=>{if(p.frames.length)await openProject(p.id);else{project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}},onError:toast});
 doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>guarded(showProjects),onExport:()=>guarded(async()=>{configureExport();resetGithubAuthorization();$('exportDialog').showModal();}),onFinish:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();})});
-(async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { await openProject(id); } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
+(async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { const p=await api(`/api/projects/${id}`);if(p.kind==='clips')await openProject(id);else{localStorage.removeItem('framelab-project');show('welcome');} } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
 
 let exampleRecord;
 async function showExample() {
