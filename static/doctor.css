@@ -7,3 +7,12 @@ body.doctor-mode .header-actions{display:none}.dw-projectbar>div:first-child{min
 .dw-project-info{flex:1;min-width:160px;overflow-wrap:anywhere}
 #doctorWorkspace .dw-back{flex-shrink:0;color:#185d4e;border:1.5px solid #7ea997;background:#eaf3ed;font-size:13px;font-weight:650;padding:11px 16px}
 @media(max-width:760px){.dw-projectbar{flex-direction:row;align-items:center;gap:12px}.dw-projectbar>div:last-child{width:100%}.dw-project-info{min-width:0}.dw-project-info strong{font-size:12px}.dw-project-info span{font-size:10px}#doctorWorkspace .dw-back{font-size:12px;padding:10px}}
+
+/* Row 2 and row 3 use clip-only playback controls. */
+.dw-playback-actions{display:flex;gap:8px;align-items:center;margin-top:9px}
+#doctorWorkspace .dw-playback-actions button{border:1px solid #ccd5cf;background:#fff;border-radius:5px;padding:7px 11px;font-size:12px}
+.dw-playback-actions button:last-child{margin-left:auto}
+#doctorWorkspace .dw-player-shell input[type=range]{cursor:pointer}
+.dw-player-shell:fullscreen{background:#161616;display:flex;flex-direction:column;justify-content:center;padding:18px;gap:8px;width:100%;height:100%}
+#doctorWorkspace .dw-player-shell:fullscreen video{min-height:0;flex:1;aspect-ratio:auto!important;object-fit:contain}
+#doctorWorkspace .dw-player-shell:fullscreen .dw-time{color:#fff}.dw-player-shell:fullscreen .dw-playback-actions{flex-shrink:0}

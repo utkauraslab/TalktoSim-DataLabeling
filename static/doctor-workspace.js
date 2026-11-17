@@ -6,6 +6,8 @@
     constructor(callbacks){
       Object.assign(this,callbacks);this.pending=Promise.resolve();this.unsavedMedia={};this.dirty=false;this.points=[];this.audioURLs=[];this.version=0;
       this.source=$('dwSource');this.player=$('dwClip');this.regionVideo=$('dwRegionVideo');this.canvas=$('dwCanvas');
+      this.clipPlayback=new ClipPlayback(this.player,{range:$('dwClipScrub'),play:$('dwClipPlay'),display:$('dwClipTiming'),mute:$('dwClipMute'),fullscreen:$('dwClipFullscreen'),shell:$('dwClipShell'),onError:this.onError});
+      this.regionPlayback=new ClipPlayback(this.regionVideo,{range:$('dwRegionScrub'),play:$('dwRegionPlay'),display:$('dwRegionTime'),mute:$('dwRegionMute'),fullscreen:$('dwRegionFullscreen'),shell:$('dwRegionShell'),onError:this.onError});
       this.bind();
     }
     error(e){this.onError(e.message||String(e));}
@@ -35,16 +37,6 @@
         this.source.currentTime=Math.max(0,Math.min(this.project.duration,this.source.currentTime+delta));
       });
       for(const video of [this.source,this.player,this.regionVideo])video.addEventListener('play',()=>{for(const other of [this.source,this.player,this.regionVideo])if(video!==other)other.pause();});
-      for(const video of [this.player,this.regionVideo]){
-        video.addEventListener('timeupdate',()=>{
-          if(!this.clip)return;
-          if(video.currentTime>=this.clip.end){video.pause();if(video.currentTime>this.clip.end+.02)video.currentTime=this.clip.end;}
-          if(!video.paused&&video.currentTime<this.clip.start-.02)video.currentTime=this.clip.start;
-          if(video===this.regionVideo){$('dwRegionScrub').value=Math.max(0,video.currentTime-this.clip.start);$('dwRegionTime').textContent=`Frame position ${Math.max(0,video.currentTime-this.clip.start).toFixed(2)} s within clip`;}else $('dwClipTiming').textContent=`Clip time ${Math.max(0,video.currentTime-this.clip.start).toFixed(2)} / ${clipModel.clipDuration(this.clip)} s · Source ${time(this.clip.start)}–${time(this.clip.end)}`;
-        });
-        video.addEventListener('play',()=>{if(this.clip&&(video.currentTime>=this.clip.end-.02||video.currentTime<this.clip.start))video.currentTime=this.clip.start;});
-      }
-      $('dwRegionScrub').oninput=()=>{this.regionVideo.pause();this.regionVideo.currentTime=this.clip.start+Number($('dwRegionScrub').value);};
       $('dwSave').onclick=action(async()=>{const button=$('dwSave');button.disabled=true;try{await this.flush();const version=this.version;await this.persist(true);$('dwSaveStatus').textContent=version===this.version?'Done!':'Not saved';this.renderGallery();}finally{button.disabled=false;}});
       for(const [name,type]of [['Goal','goal'],['Avoid','avoid']]){
         $('dw'+name+'Go').onclick=action(()=>this.beginRegion(type));
@@ -76,7 +68,7 @@
     }
     async select(id,skipFlush=false){
       if(!skipFlush)await this.flush();
-      this.player.pause();this.regionVideo.pause();this.clip=this.project.frames.find(c=>c.clip_id===id)||null;this.points=[];this.mode=null;this.image=null;this.dirty=false;this.version++;$('dwRegionStatus').textContent='';$('dwRegionScrub').value=0;
+      this.clipPlayback.clear();this.regionPlayback.clear();this.clip=this.project.frames.find(c=>c.clip_id===id)||null;this.points=[];this.mode=null;this.image=null;this.dirty=false;this.version++;$('dwRegionStatus').textContent='';$('dwRegionScrub').value=0;
       for(const url of this.audioURLs)URL.revokeObjectURL(url);this.audioURLs=[];
       $('dwAnnotation').hidden=!this.clip;$('dwEmpty').hidden=!!this.clip;$('dwDelete').disabled=!this.clip;this.renderGallery();
       if(!this.clip){$('dwRegions').hidden=true;return;}
@@ -84,7 +76,7 @@
       $('dwClipTitle').textContent=`Clip ${this.project.frames.indexOf(this.clip)+1}`;$('dwRegionTitle').textContent=$('dwClipTitle').textContent;
       $('dwSaveStatus').textContent=this.clip.reviewed?'Done!':'Not saved';$('dwLocalStatus').textContent='Changes stay on this device.';
       for(const key of ['action','tool','tissue'])this.renderChoices(key);
-      await frameStore.attachVideo(this.player,this.project.id);this.player.currentTime=this.clip.start;
+      await frameStore.attachVideo(this.player,this.project.id);this.clipPlayback.setClip(this.clip);
       await this.renderAudio('goal');await this.renderAudio('outcome');await this.regionsVisible();
     }
     renderGallery(){
@@ -179,7 +171,7 @@
     }
     async regionsVisible(){
       const show=doctorModel.needsRegions(this.state.action);$('dwRegions').hidden=!show;if(!show){this.regionVideo.pause();return;}
-      await frameStore.attachVideo(this.regionVideo,this.project.id);this.regionVideo.currentTime=this.clip.start+(this.state.region?.timestamp||0);$('dwRegionScrub').max=clipModel.clipDuration(this.clip);
+      await frameStore.attachVideo(this.regionVideo,this.project.id);this.regionPlayback.setClip(this.clip,this.state.region?.timestamp||0);
       if(this.state.frame_image){const blob=await frameStore.media(this.project.id,this.state.frame_image.file_name);if(blob)await this.loadImage(blob);}
       $('dwCanvasEmpty').hidden=!!this.image;this.draw();
     }
