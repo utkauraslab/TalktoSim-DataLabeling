@@ -1,6 +1,6 @@
 const $ = id => document.getElementById(id);
 let project = null, current = 0, revision = 0, savedRevision = 0, saving = null;
-let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false, timeline;
+let saveTimer, pollTimer, toastTimer, navigating = false, uploading = false, timeline, doctorWorkspace;
 const isClipProject=()=>project?.kind==='clips';
 const unit=()=>isClipProject()?'clip':'frame';
 const eventSections = [
@@ -41,7 +41,7 @@ async function api(url, options = {}) {
   if (!response.ok) { const body = await response.json().catch(() => ({})); throw Error(body.error || `Request failed (${response.status})`); }
   return response.json();
 }
-function show(view) { document.querySelectorAll('video').forEach(video=>video.pause()); for (const name of ['welcome', 'segmenter', 'processing', 'editor']) $(name).hidden = name !== view; window.scrollTo(0, 0); }
+function show(view) { document.body.classList.toggle('doctor-mode',view==='doctorWorkspace'); document.querySelectorAll('video').forEach(video=>video.pause()); for (const name of ['welcome', 'segmenter', 'processing', 'editor','doctorWorkspace']) $(name).hidden = name !== view; window.scrollTo(0, 0); }
 function formatTime(seconds) { return `${Math.floor(seconds / 3600).toString().padStart(2, '0')}:${Math.floor(seconds % 3600 / 60).toString().padStart(2, '0')}:${(seconds % 60).toFixed(2).padStart(5, '0')}`; }
 async function refreshProjects() {
   const projects = await api('/api/projects');
@@ -56,7 +56,7 @@ async function refreshProjects() {
 async function guarded(action) {
   if (navigating || uploading) return;
   navigating = true;
-  try { if(!$('segmenter').hidden)await timeline.flush(); await save(); await action(); } catch (err) { toast(err.message); } finally { navigating = false; }
+  try { if(!$('doctorWorkspace').hidden)await doctorWorkspace.flush(); if(!$('segmenter').hidden)await timeline.flush(); await save(); await action(); } catch (err) { toast(err.message); } finally { navigating = false; }
 }
 async function openSegmentation(p) {
   project=p;show('segmenter');await timeline.open(p);
@@ -65,6 +65,7 @@ async function openProject(id) {
   clearTimeout(pollTimer); project = await api(`/api/projects/${id}`);
   localStorage.setItem('framelab-project', id); $('breadcrumb').textContent = project.name;
   await refreshProjects();
+  if(project.kind==='clips'){project=await frameStore.enableDoctor(project.id);$('editorAnnotator').value=project.annotator;show('doctorWorkspace');await doctorWorkspace.open(project);return;}
   if(project.kind==='clips'&&(project.status==='segmenting'||!project.frames.length)){await openSegmentation(project);return;}
   if (project.status !== 'ready') { show('processing'); poll(); return; }
   show('editor'); $('projectName').textContent = project.name;
@@ -309,6 +310,7 @@ function configureExport(){
   $('exportDescription').textContent=clips?'Export clip boundaries, event labels, categories and annotator metadata.':'Export a legacy frame dataset with images and labels.';
   $('exportStructure').textContent=clips?'dataset.zip\n├── clips.json · Start / end times\n├── annotations.json · Complete clip dataset\n├── events.json · Event labels\n├── README.txt\n└── source/ · Only if selected below':'dataset.zip\n├── images/\n├── annotations.json\n├── events.json\n└── README.txt';
   $('exportHint').textContent=clips?'Clips are exact time ranges in the source video. Independent trimmed MP4 files are not generated. The source video can be included in your local ZIP only.':'Frame-level semantic annotations with COCO-compatible image tables.';
+  if(project.annotation_interface==='doctor_v1'){$('exportStructure').textContent='dataset.zip\n├── annotations.json / events.json / clips.json\n├── audio/ · Goal and Outcome recordings\n├── images/ · The selected annotation frames\n└── source/ · Local only, if selected';$('exportDescription').textContent='Download clips, click labels, audio recordings and goal/avoid polygons. JSON-only exports reference media; choose ZIP to include the actual recordings and images.';$('exportHint').textContent='GitHub uploads include JSON and recordings.zip (audio and annotated frames). The source video is never uploaded. Progress backups include recordings for resuming.';}
   $('exportZip').textContent=clips?'↓ Download ZIP':'↓ Images + JSON (ZIP)';
 }
 let githubBusy=false,githubController=null;
@@ -322,7 +324,7 @@ function githubPreview() {
   const frames=project?.frames.filter(frame=>!$('githubReviewedOnly').checked||frame.reviewed)||[];
   let destination='Enter an annotator name to generate a folder.';
   try{destination=`labeling/${githubUpload.folderName($('editorAnnotator').value)}/`;}catch{}
-  $('githubUploadPreview').textContent=`${frames.length} ${unit()}s · ${frames.reduce((sum,frame)=>sum+frame.labels.length,0)} event records\n${destination}`;
+  $('githubUploadPreview').textContent=`${frames.length} ${unit()}s · ${frames.reduce((sum,frame)=>sum+(frame.annotation?1:frame.labels.length),0)} event records\n${destination}`;
 }
 function resetGithubAuthorization() {
   githubController?.abort();$('githubToken').value='';$('githubConsent').checked=false;
@@ -384,7 +386,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); move(1); }
 });
-window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || timeline?.dirty || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || timeline?.dirty || doctorWorkspace?.dirty || doctorWorkspace?.recording || doctorWorkspace?.startingRecording || doctorWorkspace?.capturing || doctorWorkspace?.points?.length || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
 function updateFile() { const file = $('video').files[0]; if (file) { $('fileName').textContent = file.name; $('fileMeta').textContent = `${(file.size / 1024**2).toFixed(1)} MB · Video selected`; } }
 $('video').onchange = updateFile;
 for (const event of ['dragenter','dragover']) $('dropzone').addEventListener(event, e => {e.preventDefault(); $('dropzone').classList.add('dragover');});
@@ -408,6 +410,7 @@ $('deleteProject').onclick = () => guarded(async () => {
   $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); toast('Project removed from this browser.');
 });
 timeline=new ClipTimeline({onConfirm:async p=>{await openProject(p.id);current=project.frames.length-1;renderFrame();},onCancel:async p=>{if(p.frames.length)await openProject(p.id);else{project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}},onError:toast});
+doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>$('newProject').click(),onExport:()=>guarded(async()=>{configureExport();resetGithubAuthorization();$('exportDialog').showModal();}),onFinish:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();})});
 (async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { await openProject(id); } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
 
 let exampleRecord;

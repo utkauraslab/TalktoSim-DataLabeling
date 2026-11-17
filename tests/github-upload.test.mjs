@@ -142,3 +142,12 @@ test('clip submissions upload clip JSON and metadata without source media',async
   assert.equal(metadata.unit_type,'clips');assert.equal(metadata.clip_count,2);assert.equal(metadata.images_included,false);
   assert(!metadata.files.some(name=>/\.mp4|\.zip/.test(name)));
 });
+
+test('authorized doctor uploads include recording archive and declare its presence without source video',async()=>{
+  const h=harness(),s=submission();s.unitType='clips';s.clipCount=1;s.frameCount=0;
+  s.files.push({name:'recordings.zip',blob:new Blob(['audio-and-frame-archive'])});
+  const result=await h.uploader.upload({consent:true,token:TOKEN,submission:s});
+  assert(h.files.has(`${result.folder}/recordings.zip`));
+  const metadata=JSON.parse(h.blobs.get(h.files.get(`${result.folder}/submission.json`)).toString());
+  assert.equal(metadata.recordings_included,true);assert(!metadata.files.some(name=>name.endsWith('.mp4')));
+});

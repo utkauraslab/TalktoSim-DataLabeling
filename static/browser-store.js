@@ -235,6 +235,65 @@
       p.frames=plan.clips;p.segmentCuts=plan.cuts;p.nextClipId=plan.nextClipId;p.status='ready';p.segmentation_updated_at=now();return p;
     });
   }
+  async function saveVocabulary(id,key,value){if(!['action','tool','tissue'].includes(key)||typeof value!=='string'||!value.trim()||value.length>200)throw Error('Invalid custom option.');return update(id,p=>{p.vocabulary||={};p.vocabulary[key]=[...new Set([...(p.vocabulary[key]||[]),value.trim()])];return p;});}
+  async function enableDoctor(id){return update(id,p=>{p.annotation_interface='doctor_v1';p.status='ready';return p;});}
+  async function media(id,name){return (await run('images','readonly',s=>s.get(`${id}/${name}`)))?.blob;}
+  function mediaName(clip,type,blob){
+    if(type==='frame')return `images/${clip.clip_id.replace(/[^a-zA-Z0-9_-]/g,'_')}.jpg`;
+    const ext=blob.type.includes('mp4')?'m4a':blob.type.includes('ogg')?'ogg':'webm';
+    return `audio/${clip.clip_id.replace(/[^a-zA-Z0-9_-]/g,'_')}_${type}.${ext}`;
+  }
+  async function saveDoctor(id,clipId,annotation,blobs={},complete=false){
+    await ready;
+    return new Promise((resolve,reject)=>{
+      const tx=database.transaction(['projects','images'],'readwrite'),projects=tx.objectStore('projects'),assets=tx.objectStore('images');let result,error;
+      const r=projects.get(id);r.onsuccess=()=>{try{
+        const p=r.result,c=p?.frames.find(c=>c.clip_id===clipId);if(!c)throw Error('Clip not found.');
+        result=doctorModel.validate(annotation,clipModel.clipDuration(c));
+        for(const type of ['goal','outcome','frame']){
+          const key=type==='frame'?'frame_image':`${type}_audio`,old=c.annotation?.[key];
+          if(old)result[key]=old;
+          if(Object.hasOwn(blobs,type)){
+            if(old)assets.delete(`${id}/${old.file_name}`);
+            const blob=blobs[type];delete result[key];
+            if(blob){if(!(blob instanceof Blob)||blob.size>20*1024**2||!blob.size)throw Error('Each recording or image must be between 1 byte and 20 MB.');
+              if(type==='frame'?!blob.type.startsWith('image/'):!blob.type.startsWith('audio/'))throw Error('Invalid annotation media type.');
+              const name=mediaName(c,type,blob);assets.put({key:`${id}/${name}`,project_id:id,blob});result[key]={file_name:name,mime_type:blob.type,size_bytes:blob.size};
+            }
+          }
+        }
+        if(complete&&(!result.action||!result.tool||!result.tissue||!result.goal_audio||!result.outcome_audio))throw Error('Choose Action, Tool and Tissue, then record both Goal and Outcome before Save.');
+        c.annotation=result;c.reviewed=!!complete;c.annotator=p.annotator;c.updated_at=now();p.completed=false;p.annotation_interface='doctor_v1';projects.put(p);
+      }catch(e){error=e;tx.abort();}};
+      tx.oncomplete=()=>resolve(result);tx.onabort=tx.onerror=()=>reject(error||tx.error||Error('Could not save locally.'));
+    });
+  }
+  async function deleteClip(id,clipId){
+    await ready;
+    return new Promise((resolve,reject)=>{
+      const tx=database.transaction(['projects','images'],'readwrite'),s=tx.objectStore('projects'),r=s.get(id);let result,error;
+      r.onsuccess=()=>{try{const p=r.result,c=p?.frames.find(c=>c.clip_id===clipId);if(!c)throw Error('Clip not found.');
+        for(const key of ['goal_audio','outcome_audio','frame_image'])if(c.annotation?.[key])tx.objectStore('images').delete(`${id}/${c.annotation[key].file_name}`);
+        p.frames=p.frames.filter(c=>c.clip_id!==clipId);p.frames.forEach((c,i)=>c.id=i+1);p.completed=false;s.put(p);result=p;
+      }catch(e){error=e;tx.abort();}};tx.oncomplete=()=>resolve(result);tx.onabort=tx.onerror=()=>reject(error||tx.error);
+    });
+  }
+  function doctorDataset(p,onlyReviewed){
+    const clips=p.frames.filter(c=>!onlyReviewed||c.reviewed);if(!clips.length)throw Error('No clips to export.');
+    const actions=[...new Set(clips.map(c=>c.annotation?.action).filter(Boolean))];
+    return {info:{version:'4.0',annotation_type:'video_clip_audio_regions',time_unit:'seconds',event_time_reference:'clip',clip_boundary_time_reference:'source_video',polygon_coordinates:'normalized_xy',description:p.name},
+      videos:[{id:p.id,source_name:p.name,file_name:`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,duration_seconds:p.duration,width:p.width,height:p.height}],
+      categories:actions.map((name,i)=>({id:i+1,name})),
+      clips:clips.map(c=>({id:c.clip_id,video_id:p.id,start:c.start,end:c.end,duration_seconds:clipModel.clipDuration(c),reviewed:c.reviewed})),
+      annotations:clips.map(c=>({clip_id:c.clip_id,video_id:p.id,clip_start:c.start,clip_end:c.end,time_reference:'clip',time:{start:0,end:clipModel.clipDuration(c)},annotator:c.annotator||p.annotator,reviewed:c.reviewed,updated_at:c.updated_at||null,...copy(c.annotation||{}),...(c.labels.length?{legacy_labels:copy(c.labels)}:{})})),
+      events:clips.map(c=>({event_id:c.clip_id,clip_id:c.clip_id,video_id:p.id,annotator:c.annotator||p.annotator,reviewed:c.reviewed,...copy(c.annotation||{}),time_reference:'clip',time:{start:0,end:clipModel.clipDuration(c)},clip_start:c.start,clip_end:c.end}))};
+  }
+  async function* doctorAssets(p,onlyReviewed){
+    for(const c of p.frames.filter(c=>!onlyReviewed||c.reviewed))for(const key of ['goal_audio','outcome_audio','frame_image']){
+      const asset=c.annotation?.[key];if(asset){const blob=await media(p.id,asset.file_name);if(!blob)throw Error(`Missing saved media: ${asset.file_name}`);yield [asset.file_name,blob];}
+    }
+  }
+  async function encodeBlob(blob){let result='';const bytes=new Uint8Array(await blob.arrayBuffer());for(let i=0;i<bytes.length;i+=16384)result+=String.fromCharCode(...bytes.subarray(i,i+16384));return btoa(result);}
   async function addClip(id,start,end) {
     return update(id,p=>{
       if(p.kind!=='clips'||!Number.isFinite(start)||!Number.isFinite(end)||start<0||end>p.duration||end-start<.25)throw Error('Choose a clip of at least 0.25 seconds within the video.');
@@ -252,7 +311,7 @@
   async function backup(id) {
     const p=await readProject(id);
     if(p.kind!=='clips')throw Error('Progress backup is available for clip projects.');
-    downloadBlob(new Blob([JSON.stringify({format:'talktosim-progress',version:1,project:p},null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
+    downloadBlob(new Blob([JSON.stringify({format:'talktosim-progress',version:2,project:p,media:await (async()=>{const items=[];for await(const [name,blob]of doctorAssets(p,false))items.push({name,mime_type:blob.type,base64:await encodeBlob(blob)});return items;})()},null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
   }
   async function importProgress(file,video,annotator) {
     const data=JSON.parse(await file.text());
@@ -260,7 +319,10 @@
     if(!source&&data.info?.annotation_type==='video_clip_semantics'&&data.videos?.length===1){
       const v=data.videos[0];source={kind:'clips',event_time_reference:data.info.event_time_reference,name:v.source_name||data.info.source_video,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>({id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:c.reviewed,annotator:c.annotator,labels:data.events.filter(e=>e.clip_id===c.id)}))};
     }
-    if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or complete clip dataset annotations.json.');
+    if(!source&&data.info?.annotation_type==='video_clip_audio_regions'&&data.videos?.length===1){
+      const v=data.videos[0];source={kind:'clips',annotation_interface:'doctor_v1',event_time_reference:'clip',name:v.source_name,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>{const a=copy(data.annotations.find(a=>a.clip_id===c.id)||{action:'',tool:'',tissue:''});delete a.goal_audio;delete a.outcome_audio;delete a.frame_image;return {id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:false,labels:[],annotation:a};})};
+    }
+    if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or clip dataset annotations.json. Use Download progress to include audio and frame media.');
     if(!video||video.name!==source.name)throw Error('Select the original video with the same filename as the progress file.');
     if(!Number.isFinite(source.duration)||source.duration<=0)throw Error('Invalid source duration.');
     source=clipModel.normalizeTiming(source);
@@ -269,12 +331,14 @@
       if(!Number.isFinite(c.start)||!Number.isFinite(c.end)||c.start<0||c.end>source.duration||c.end<=c.start||typeof c.clip_id!=='string'||ids.has(c.clip_id)||!Array.isArray(c.labels)||c.labels.length>100)throw Error('Invalid clip in the progress file.');
       ids.add(c.clip_id);const labels=c.labels.map(l=>({...validate(l,!!c.reviewed,Number((source.duration-c.start).toFixed(6))),time_reference:'clip'}));
       for(const l of labels)if((l.time.start!==null&&l.time.start>clipModel.clipDuration(c))||(l.time.end!==null&&l.time.end>clipModel.clipDuration(c)))throw Error('Event times are outside their clip.');
-      return {id:i+1,clip_id:c.clip_id,start:c.start,end:c.end,reviewed:!!c.reviewed,labels,annotator:String(c.annotator||annotator||'').slice(0,200),updated_at:c.updated_at||null};
+      return {id:i+1,clip_id:c.clip_id,start:c.start,end:c.end,reviewed:!!c.reviewed,labels,...(c.annotation?{annotation:{...doctorModel.validate(c.annotation,c.end-c.start),...Object.fromEntries(['goal_audio','outcome_audio','frame_image'].filter(k=>c.annotation[k]).map(k=>[k,c.annotation[k]]))}}:{}),annotator:String(c.annotator||annotator||'').slice(0,200),updated_at:c.updated_at||null};
     });
     const created=await createClipProject(video,annotator||source.annotator||'Doctor');
     try{
       if(Math.abs(created.duration-source.duration)>.1||created.width!==source.width||created.height!==source.height)throw Error('This video does not match the saved progress duration or dimensions.');
-      return await update(created.id,p=>{p.frames=frames;p.nextClipId=Math.max(frames.length,...frames.map(c=>Number(c.clip_id.match(/^clip_(\d+)$/)?.[1])||0))+1;p.completed=false;return p;});
+      if(source.annotation_interface==='doctor_v1'){for(const item of data.media||[]){if(!/^(audio|images)\/[a-zA-Z0-9_.-]+$/.test(item.name)||typeof item.base64!=='string'||item.base64.length>30*1024**2)throw Error('Invalid media in progress backup.');const bytes=Uint8Array.from(atob(item.base64),c=>c.charCodeAt(0));await run('images','readwrite',s=>s.put({key:`${created.id}/${item.name}`,project_id:created.id,blob:new Blob([bytes],{type:item.mime_type})}));}}
+      if(source.annotation_interface==='doctor_v1')for(const c of frames){for(const key of ['goal_audio','outcome_audio','frame_image']){const asset=c.annotation?.[key];if(asset&&(!/^(audio|images)\/[a-zA-Z0-9_.-]+$/.test(asset.file_name)||!await media(created.id,asset.file_name)))throw Error('Recording or frame missing from this backup. Use Download progress to make a complete backup.');}if(c.reviewed&&(!c.annotation?.action||!c.annotation?.tool||!c.annotation?.tissue||!c.annotation?.goal_audio||!c.annotation?.outcome_audio))c.reviewed=false;}
+      return await update(created.id,p=>{if(source.annotation_interface)p.annotation_interface=source.annotation_interface;if(source.vocabulary)p.vocabulary=source.vocabulary;p.frames=frames;p.nextClipId=Math.max(frames.length,...frames.map(c=>Number(c.clip_id.match(/^clip_(\d+)$/)?.[1])||0))+1;p.completed=false;return p;});
     }catch(e){await remove(created.id);throw e;}
   }
   function clipDataset(p,onlyReviewed) {
@@ -294,6 +358,7 @@
     return data;
   }
   function dataset(p,onlyReviewed) {
+    if(p.annotation_interface==='doctor_v1')return doctorDataset(p,onlyReviewed);
     if(p.kind==='clips')return clipDataset(p,onlyReviewed);
     const frames=p.frames.filter(f => !onlyReviewed || f.reviewed);
     if (!frames.length) throw Error('No frames to export. Complete a frame or export all frames.');
@@ -358,6 +423,7 @@
     if(p.kind==='clips'){
       async function* clipEntries(){
         yield ['annotations.json',json(data)];yield ['events.json',json(data.events)];yield ['clips.json',json(data.clips)];
+        if(p.annotation_interface==='doctor_v1')yield* doctorAssets(p,onlyReviewed);
         yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nSource video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
         if(options.includeVideo){const source=await run('videos','readonly',store=>store.get(id));if(!source)throw Error('Source video unavailable.');yield [`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,source.blob];}
       }
@@ -378,6 +444,7 @@
     if(p.kind==='clips'){
       if(includeImages)throw Error('Clip uploads contain JSON only; the source video is never uploaded.');
       files.push({name:'clips.json',blob:json(data.clips)});
+      if(p.annotation_interface==='doctor_v1'){async function* entries(){yield ['annotations.json',json(data)];yield ['clips.json',json(data.clips)];yield* doctorAssets(p,onlyReviewed);}files.push({name:'recordings.zip',blob:await zip(entries(),progress)});}
       return {annotator:p.annotator,projectId:p.id,sourceVideo:p.name,unitType:'clips',clipCount:data.clips.length,
         frameCount:0,annotationCount:data.annotations.length,onlyReviewed,includeImages:false,files};
     }
@@ -405,5 +472,5 @@
       tx.oncomplete=resolve;tx.onabort=tx.onerror=()=>reject(tx.error);
     });jobs.delete(id);if(videoURLs.has(id)){URL.revokeObjectURL(videoURLs.get(id));videoURLs.delete(id);}
   }
-  window.frameStore={request,create,createClipProject,addClip,finishProject,backup,importProgress,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
+  window.frameStore={request,create,createClipProject,enableDoctor,saveVocabulary,saveDoctor,deleteClip,media,addClip,finishProject,backup,importProgress,saveCuts,confirmCuts,attachVideo,attachImage,releaseImages,exportData,prepareSubmission,remove};
 })();

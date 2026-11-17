@@ -4,31 +4,27 @@
 
 Add one clip, label and save it, then add the next. No installation or GitHub account is required for local work. All videos and annotations stay on this device unless an optional upload is authorized.
 
-## Doctor workflow: one clip at a time
+## PDF-based doctor workspace
 
-1. Upload the video and enter your annotator name. No clips are generated automatically.
-2. Click **Add a clip**, drag the Start and End sliders or enter exact seconds, preview the interval, and click **Add this clip → Label**. Each interval is independent: overlaps and unannotated gaps are allowed. Minimum clip duration is 0.25 seconds.
-3. Fill in Class and X/Y/T/Z/O. **Save clip locally** stores an unfinished draft; edits also autosave. **Save & complete this clip** validates the full record. Click **Add a clip** whenever you want another interval. Existing clips are preserved.
-4. Use **Download progress** to save a resumable JSON file on disk. The same browser can reopen projects directly from **Recent projects** after interruption. To restore from a file, choose **Resume saved labeling**, the progress JSON (or complete `annotations.json` dataset), and the original video. The video filename, duration and dimensions must match. Import creates a new local project without overwriting existing work. Progress files contain labels and boundaries, not the video; keep the original separately.
-5. When all added clips are reviewed, click **Finish project**. This saves completion locally and enables the optional GitHub upload. Adding a clip or editing labels returns the project to work in progress. Nothing uploads automatically. Dataset downloads and progress backups remain available before finishing.
+The upload page and annotator input are retained. Clip projects open a three-row workspace matching the supplied design.
 
-**Event timing is clip-relative.** New annotations automatically show Start = 0, End = clip duration, and Outcome observed at = clip duration. These values remain editable; verify the outcome observation time rather than treating the default as evidence. `time` and `O.evidence_interval` both use seconds from the clip start. Event start/end must lie within 0–clip duration. Outcome/evidence may extend beyond the clip, up to the remaining source-video duration. The native video player and clip boundaries still use source-video time. For a source interval 42–49.5 seconds, the event defaults to 0–7.5 seconds. An outcome at source second 52 is clip second 10.
+1. **Add Clip / Delete Clip:** the original video is on the left with +1/−1, +5/−5, +30/−30 and custom +x/−x second buttons. Drag the timeline, click **Set clip start**, seek again and click **Set clip end**, then **Done!** to create the clip. Overlaps are allowed. A scrollable two-column video gallery and dropdown on the right select the current clip. **Delete Clip** asks before removing that clip and its media; other clips are preserved.
+2. **Clip video + labels:** click one Action (A), one Tool (X), and one Tissue (Y). **Other +** opens a short input; **Add option** adds a reusable button, which you then click to select. Options persist with the project. Goal (I) and Outcome (O) use audio recordings, with Record, Stop, playback, re-record and Remove controls. Browser microphone permission is required, and recordings are limited to three minutes / 20 MB each. Drafts save locally. **Save** requires all three selections and both recordings, then displays **Done!**. No text transcription is required or performed.
+3. **One-frame regions:** this row appears only for the **Tension** and **Exposure** actions. Scrub the clip, then click green **Go** (goal) or pink **Go** (avoid) to freeze one frame. Click at least three vertices on the image; a polygon closes automatically. Use the matching **Save goal areas / Save avoid areas** button. Multiple polygons can share that same frame. **Redo** clears only the corresponding color. Choosing a different frame asks before replacing both sets of regions. Finish with the main **Save** button to mark the updated clip Done.
 
-Existing browser projects and older progress/dataset files using source-video event times are converted once by subtracting the clip start. Source clip boundaries, semantic labels and review states remain preserved. New backups and events explicitly mark their time reference to prevent double conversion.
+### Local saving, recovery and exports
 
-The source video is stored in IndexedDB for playback after reopening. Browser storage must have enough free space for it; unsupported codecs or insufficient space produce an actionable error. Original frame projects from previous releases remain readable and exportable. New projects use clip annotation.
+Videos, choices, audio, selected frame and polygons stay in this browser/device. **Download progress** produces a portable JSON backup containing the actual recordings and frame image, as well as project metadata. Restore it with the original video on the upload page. The original video is kept separately. JSON-only `annotations.json` imports restore labels/regions as drafts; use the progress backup to restore the actual media. Existing frame projects remain readable. Older clip labels are retained as legacy data and can supply initial choices in the new UI.
 
-### Clip export schema
+Version **4.0** datasets include `videos`, `clips`, `categories`, `annotations` and `events`. Each annotation contains single-valued `action`, `tool`, `tissue`, `goal_audio` / `outcome_audio` media references, and optionally `region` with one clip-relative `timestamp`, original image dimensions and normalized `[x,y]` polygons under `goal` and `avoid`. `frame_image` points to the unpainted source frame; polygons are stored separately. Clip boundaries remain source-video seconds, while event/frame times begin at clip second 0. Previous XYTZO exports remain available as preserved `legacy_labels`.
 
-Clip exports use version 3.1: `videos`, `clips`, `categories`, `annotations`, and `events`. Each clip has a stable `clip_id`, source `video_id`, `start` and `end` times, duration, annotator and review state. Each event references its clip and declares `time_reference: "clip"`. Dataset info declares `event_time_reference: "clip"` and `clip_boundary_time_reference: "source_video"`. The `clips` table and event `clip_start`/`clip_end` retain source-video seconds. Add `clip_start` to a clip-relative event time to recover the source-video timestamp.
-
-The ZIP contains `clips.json`, `annotations.json`, `events.json`, and a README. An optional **Include source video in the local ZIP** adds the original under `source/`. Clip boundaries are stored as exact time ranges; separate re-encoded MP4 files are not generated. Local archives support ZIP64 for large source files, subject to browser/device limits. GitHub uploads include clip JSON only; the source video is never uploaded. Legacy frame exports retain their existing format.
+Local ZIP exports include JSON, `audio/`, `images/` and a README. Source video inclusion is optional for local ZIP only. Separate trimmed MP4s are not generated. JSON-only exports reference media and do not contain its bytes. **Finish project** enables optional authorized GitHub upload. For this interface, uploads include JSON plus `recordings.zip` containing audio and annotated frames; the source video is never uploaded. The authorization screen explicitly names these media types. Each uploaded file must fit the 50 MiB GitHub upload limit. Nothing uploads automatically.
 
 ## Optional GitHub upload
 
 After **Finish project**, in **Export / upload**, expand **Optional: upload labeling to GitHub**.
 
-1. Choose reviewed clips only (default), or include drafts. Legacy frame projects may optionally include frame images; new clip projects upload JSON only.
+1. Choose reviewed clips only (default). Doctor projects include recordings and the selected annotation frame in `recordings.zip`. Legacy frame projects can separately opt into a frame-image ZIP.
 2. Read the destination and public-data notice. Check **I authorize uploading…** only if you want to share that data in the repository.
 3. Provide your own repository-scoped GitHub authorization token. The on-page help links to GitHub token creation: choose resource owner **utkauraslab**, **Only select repositories → TalktoSim-DataLabeling**, and **Contents: read and write**. Organization approval may be required. The GitHub account must already have write access to this repository; a token cannot grant access the account does not have.
 4. Click **Authorize & upload to GitHub**. A successful upload returns a link to its repository folder.
@@ -46,7 +42,8 @@ labeling/
     ├── events.json
     ├── clips.json        # clip projects
     ├── submission.json
-    └── dataset.zip       # only when images are selected
+    ├── recordings.zip    # doctor audio and selected annotation frames
+    └── dataset.zip       # legacy frame projects, when images are selected
 ```
 
 The folder is `annotator_UTC-time`, with millisecond precision. Names support Unicode; path separators and unsafe characters are replaced, and long names are shortened. `submission.json` records annotator, upload time, GitHub account, selected scope, explicit consent, and file names. Existing folders are never overwritten. Clip submissions record `unit_type: clips` and `clip_count` in their manifest. Each submission becomes one atomic commit on `main`; concurrent updates retry without forcing or replacing repository history. Website code remains on `gh-pages`.
@@ -57,7 +54,7 @@ GitHub references: [fine-grained token setup](https://docs.github.com/en/authent
 
 ## Annotation schema and examples
 
-The English interface includes Class presets (including Tension), Other/custom classes, a downloadable event example, and additional named fields within each X/Y/T/Z/O group. Exports preserve `event_id`, `time`, `X`, `Y`, `T`, `Z`, `O`, Class, annotator, review status, and edit timestamps. COCO-compatible tables are provided for frame-level semantics; detection boxes are not generated.
+The new English doctor interface uses A/X/Y selections and I/O audio. Tension and Exposure are Actions. Older XYTZO annotations and custom fields remain preserved in backups and legacy export data. Exports preserve `event_id`, `time`, `X`, `Y`, `T`, `Z`, `O`, Class, annotator, review status, and edit timestamps. COCO-compatible tables are provided for frame-level semantics; detection boxes are not generated.
 
 Use an H.264 MP4 for broad compatibility. Keep the tab open during extraction. Supported codecs, storage limits, and maximum video sizes depend on the browser/device. Export a dataset before clearing browser data or switching devices.
 

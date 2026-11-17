@@ -27,10 +27,10 @@
     if(!submission||!Array.isArray(submission.files)||!submission.files.length)throw Error('Prepare the annotation dataset first.');
     const names=new Set();
     for(const file of submission.files) {
-      if(!['annotations.json','events.json','clips.json','dataset.zip'].includes(file.name)||!(file.blob instanceof Blob))throw Error('Unsupported submission file.');
+      if(!['annotations.json','events.json','clips.json','dataset.zip','recordings.zip'].includes(file.name)||!(file.blob instanceof Blob))throw Error('Unsupported submission file.');
       if(names.has(file.name))throw Error('Duplicate submission filename.');names.add(file.name);
       if(file.name==='dataset.zip'&&submission.includeImages!==true)throw Error('Frame images were not authorized for this upload.');
-      if(file.blob.size>MAX_FILE_BYTES)throw Error(`${file.name} is larger than 50 MB. Upload labels without images, or download the full ZIP locally.`);
+      if(file.blob.size>MAX_FILE_BYTES)throw Error(`${file.name} is larger than 50 MB. Download the full ZIP locally or upload a smaller reviewed selection.`);
     }
     const timestamp=new Date(),folder=`labeling/${folderName(submission.annotator,timestamp)}`,createdAt=timestamp.toISOString();
     const credential=token.trim();pending=true;
@@ -59,7 +59,7 @@
       const metadata={schema_version:'1.0',annotator:submission.annotator,uploaded_at:createdAt,github_account:user.login,
         project_id:submission.projectId,source_video:submission.sourceVideo,unit_type:submission.unitType||'frames',frame_count:submission.frameCount,
         ...(submission.unitType==='clips'?{clip_count:submission.clipCount}:{}),
-        annotation_count:submission.annotationCount,reviewed_only:submission.onlyReviewed,images_included:submission.includeImages,
+        annotation_count:submission.annotationCount,reviewed_only:submission.onlyReviewed,images_included:submission.includeImages,recordings_included:submission.files.some(f=>f.name==='recordings.zip'),annotation_frames_included:submission.files.some(f=>f.name==='recordings.zip'),
         consent:{granted:true,at:createdAt,destination:REPOSITORY,visibility:repo.private?'private':'public'},
         files:[...submission.files.map(file=>file.name),'submission.json']};
       const files=[...submission.files,{name:'submission.json',blob:new Blob([JSON.stringify(metadata,null,2)],{type:'application/json'})}];

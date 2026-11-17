@@ -9,6 +9,7 @@ import {webcrypto} from 'node:crypto';
 import {IDBFactory,IDBKeyRange} from 'fake-indexeddb';
 
 const source=readFileSync(new URL('../static/browser-store.js',import.meta.url),'utf8');
+const doctorSource=readFileSync(new URL('../static/doctor-model.js',import.meta.url),'utf8');
 const clipSource=readFileSync(new URL('../static/clip-model.js',import.meta.url),'utf8');
 const example=JSON.parse(readFileSync(new URL('../static/example.json',import.meta.url),'utf8'));
 // Frame fixtures keep their original source-video timing contract.
@@ -27,7 +28,7 @@ function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
   const objectURL={createObjectURL(blob){const url=`blob:test/${++next}`;urls.set(url,blob);return url;},revokeObjectURL(url){urls.delete(url);}};
   const context=vm.createContext({window:{},indexedDB:db,IDBKeyRange,structuredClone,URL:class extends URL {
     static createObjectURL=objectURL.createObjectURL;static revokeObjectURL=objectURL.revokeObjectURL;
-  },Blob,TextEncoder,crypto:webcrypto,console,location:{href:'https://utkauraslab.github.io/TalktoSim-DataLabeling/'},
+  },Blob,TextEncoder,btoa,atob,crypto:webcrypto,console,location:{href:'https://utkauraslab.github.io/TalktoSim-DataLabeling/'},
     navigator:{storage:{persist:async()=>true},locks:{
       async request(name,fn){locks.add(name);try{return await fn();}finally{locks.delete(name);}},
       async query(){return {held:[...locks].map(name=>({name}))};}
@@ -41,8 +42,9 @@ function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
     setTimeout(fn,ms){const timer=setTimeout(fn,ms);if(ms>=60000)timer.unref();return timer;},clearTimeout
   });
   vm.runInContext(clipSource,context);context.clipModel=context.window.clipModel;
+  vm.runInContext(doctorSource,context);context.doctorModel=context.window.doctorModel;
   vm.runInContext(source,context);
-  return {store:context.window.frameStore,model:context.window.clipModel,downloads,sampled,db,createVideo:()=>new Video()};
+  return {store:context.window.frameStore,model:context.window.clipModel,doctorModel:context.window.doctorModel,downloads,sampled,db,createVideo:()=>new Video()};
 }
 async function create(h,interval=0.5) {
   const p=await h.store.create(new File(['video'],'sample.mp4'),interval,'Alice');
@@ -283,4 +285,42 @@ test('legacy source-video times migrate once on reopen and old file import witho
   const restored=await h.store.importProgress(new Blob([JSON.stringify({format:'talktosim-progress',project:old})]),video,'Doctor');
   assert.deepEqual(plain(restored.frames[0].labels[0].time),{start:0,end:7.5,outcome_observed_at:10});
   assert.equal(restored.frames[0].labels[0].Z.xxx,'Custom intention');
+});
+
+test('PDF workspace keeps single choices, audio bytes and one-frame polygons in local ZIP and progress restore',async()=>{
+  const h=harness({duration:100}),video=new File(['v'],'doctor.mp4');
+  const p=await h.store.createClipProject(video,'Doctor');await h.store.enableDoctor(p.id);const q=await h.store.addClip(p.id,42,50),clip=q.frames[0];
+  await h.store.saveVocabulary(p.id,'tool','My custom tool');
+  assert.deepEqual(plain((await h.store.request(`/api/projects/${p.id}`)).vocabulary.tool),['My custom tool']);
+  const state={action:'Tension',tool:'My custom tool',tissue:'Gallbladder',region:{timestamp:2,width:640,height:360,goal:[[[.1,.1],[.5,.1],[.4,.6]]],avoid:[[[.7,.2],[.9,.2],[.9,.8]]]}};
+  await assert.rejects(h.store.saveDoctor(p.id,clip.clip_id,state,{},true),/record both/);
+  const blobs={goal:new Blob(['goal-bytes'],{type:'audio/webm'}),outcome:new Blob(['outcome-bytes'],{type:'audio/mp4'}),frame:new Blob(['frame-bytes'],{type:'image/jpeg'})};
+  const saved=await h.store.saveDoctor(p.id,clip.clip_id,state,blobs,true);
+  assert.equal(saved.goal_audio.file_name,'audio/clip_001_goal.webm');assert.equal(saved.outcome_audio.file_name,'audio/clip_001_outcome.m4a');
+  assert.equal(await (await h.store.media(p.id,saved.goal_audio.file_name)).text(),'goal-bytes');
+  await h.store.exportData(p.id,'zip',false);
+  const dir=mkdtempSync(path.join(tmpdir(),'framelab-doctor-')),archive=path.join(dir,'doctor.zip');
+  try{
+    writeFileSync(archive,Buffer.from(await h.downloads.at(-1).blob.arrayBuffer()));
+    const check=spawnSync('python3',['-c','import zipfile,json,sys\nz=zipfile.ZipFile(sys.argv[1]);assert z.testzip() is None\na=json.loads(z.read("annotations.json"));assert a["info"]["version"]=="4.0"\nr=a["annotations"][0];assert r["action"]=="Tension";assert r["region"]["timestamp"]==2\nassert z.read(r["goal_audio"]["file_name"])==b"goal-bytes"\nassert z.read(r["outcome_audio"]["file_name"])==b"outcome-bytes"\nassert z.read(r["frame_image"]["file_name"])==b"frame-bytes"\nassert not any(n.startswith("source/") for n in z.namelist())',archive],{encoding:'utf8'});assert.equal(check.status,0,check.stderr);
+  }finally{rmSync(dir,{recursive:true,force:true});}
+  await h.store.exportData(p.id,'json',false);const jsonOnly=h.downloads.at(-1).blob;
+  const jsonRestorer=harness({duration:100}),jsonDraft=await jsonRestorer.store.importProgress(jsonOnly,video,'Doctor');assert.equal(jsonDraft.frames[0].annotation.action,'Tension');assert.equal(jsonDraft.frames[0].reviewed,false);assert.equal(jsonDraft.frames[0].annotation.goal_audio,undefined);
+  await h.store.backup(p.id);const backup=h.downloads.at(-1).blob;
+  const restored=harness({duration:100}),r=await restored.store.importProgress(backup,video,'Doctor');
+  assert.deepEqual(plain(r.frames[0].annotation.region),state.region);assert.equal(r.annotation_interface,'doctor_v1');assert.equal(r.vocabulary.tool[0],'My custom tool');
+  assert.equal(await (await restored.store.media(r.id,saved.outcome_audio.file_name)).text(),'outcome-bytes');
+  await h.store.finishProject(p.id);const submission=await h.store.prepareSubmission(p.id);
+  assert.deepEqual(plain(submission.files.map(f=>f.name)),['annotations.json','events.json','clips.json','recordings.zip']);
+  await h.store.addClip(p.id,45,55);await h.store.deleteClip(p.id,clip.clip_id);
+  const remaining=await h.store.request(`/api/projects/${p.id}`);assert.equal(remaining.frames.length,1);assert.equal(remaining.frames[0].clip_id,'clip_002');assert.equal(remaining.frames[0].id,1);
+  assert.equal(await h.store.media(p.id,saved.goal_audio.file_name),undefined);
+});
+
+test('PDF region model rejects invalid polygons and only Tension / Exposure activate region UI',()=>{
+  const h=harness(),m=h.doctorModel;
+  assert.equal(m.needsRegions('Tension'),true);assert.equal(m.needsRegions('Exposure'),true);assert.equal(m.needsRegions('Dissection'),false);
+  const a={action:'Tension',tool:'Grasper',tissue:'Liver',region:{timestamp:1,width:640,height:360,goal:[],avoid:[]}};
+  for(const points of [[[0,0],[1,1]],[[0,0],[.5,.5],[1,1]],[[0,0],[2,0],[0,1]]])assert.throws(()=>m.validate({...a,region:{...a.region,goal:[points]}},5));
+  assert.throws(()=>m.validate({...a,region:{...a.region,timestamp:7}},5));
 });
