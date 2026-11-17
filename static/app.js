@@ -305,7 +305,7 @@ $('saveClip').onclick=()=>guarded(async()=>{revision++;await save();toast('This 
 $('downloadProgress').onclick=()=>guarded(async()=>{await frameStore.backup(project.id);toast('Progress downloaded. Keep the original video to resume on another browser.');});
 $('resumeProject').onclick=async()=>{
   if(uploading)return;uploading=true;$('resumeProject').disabled=true;
-  try{const file=$('progressFile').files[0];if(!file)throw Error('Choose a progress JSON first.');const p=await frameStore.importProgress(file,$('resumeVideo').files[0],$('annotator').value);uploading=false;await openProject(p.id);}
+  try{const file=$('progressFile').files[0];if(!file)throw Error('Choose your saved local ZIP first.');if(!$('resumeVideo').files[0])throw Error('Choose the original video.');const p=await frameStore.importProgress(file,$('resumeVideo').files[0],$('annotator').value);uploading=false;await openProject(p.id);}
   catch(e){toast(e.message);}finally{uploading=false;$('resumeProject').disabled=false;}
 };
 $('finishProject').onclick=()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();toast('Project finished and saved locally. GitHub upload is optional.');});

@@ -327,8 +327,40 @@
     if(p.kind!=='clips')throw Error('Progress backup is available for clip projects.');
     downloadBlob(new Blob([JSON.stringify(await progressPayload(p),null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
   }
+  async function progressFromFile(file){
+    const signature=new DataView(await file.slice(0,4).arrayBuffer());
+    if(signature.byteLength!==4||signature.getUint32(0,true)!==0x04034b50)return JSON.parse(await file.text());
+    // Our local downloads are stored ZIP entries. Read only headers and progress.json,
+    // skipping large audio/source-video blobs without loading the whole archive.
+    let offset=0;
+    for(let count=0;count<100000&&offset+30<=file.size;count++){
+      const h=new DataView(await file.slice(offset,offset+30).arrayBuffer());
+      if(h.getUint32(0,true)!==0x04034b50)break;
+      const flags=h.getUint16(6,true),method=h.getUint16(8,true),expectedCRC=h.getUint32(14,true),nameSize=h.getUint16(26,true),extraSize=h.getUint16(28,true);
+      if(flags&9)throw Error('Choose the original ZIP from Download to local (encrypted or repackaged ZIPs are not supported).');
+      const name=new TextDecoder().decode(await file.slice(offset+30,offset+30+nameSize).arrayBuffer());
+      let size=h.getUint32(18,true);
+      if(size===0xffffffff){
+        const extra=new DataView(await file.slice(offset+30+nameSize,offset+30+nameSize+extraSize).arrayBuffer());let found=false;
+        for(let at=0;at+4<=extra.byteLength;){const tag=extra.getUint16(at,true),length=extra.getUint16(at+2,true);if(at+4+length>extra.byteLength)break;
+          if(tag===1){const skip=h.getUint32(22,true)===0xffffffff?8:0;if(length<skip+8)break;size=Number(extra.getBigUint64(at+4+skip,true));found=true;break;}at+=4+length;
+        }
+        if(!found)throw Error('Invalid ZIP64 size. Choose the original local ZIP.');
+      }
+      const start=offset+30+nameSize+extraSize,end=start+size;
+      if(!Number.isSafeInteger(size)||size<0||end>file.size||end<=offset)throw Error('The ZIP is incomplete or damaged. Download it again.');
+      if(name==='progress.json'){
+        if(method!==0)throw Error('Choose the original ZIP from Download to local without recompressing it.');
+        const progress=file.slice(start,end);
+        if(await crc32(progress)!==expectedCRC)throw Error('The saved project in this ZIP is damaged. Download it again.');
+        return JSON.parse(await progress.text());
+      }
+      offset=end;
+    }
+    throw Error('This ZIP has no saved project. Choose a ZIP created with Download to local.');
+  }
   async function importProgress(file,video,annotator) {
-    const data=JSON.parse(await file.text());
+    const data=await progressFromFile(file);
     let source=data.format==='talktosim-progress'?data.project:null;
     if(!source&&data.info?.annotation_type==='video_clip_semantics'&&data.videos?.length===1){
       const v=data.videos[0];source={kind:'clips',event_time_reference:data.info.event_time_reference,name:v.source_name||data.info.source_video,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>({id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:c.reviewed,annotator:c.annotator,labels:data.events.filter(e=>e.clip_id===c.id)}))};
@@ -438,7 +470,7 @@
       async function* clipEntries(){
         yield ['annotations.json',json(data)];yield ['events.json',json(data.events)];yield ['clips.json',json(data.clips)];
         if(p.annotation_interface==='doctor_v1'){yield* doctorAssets(p,onlyReviewed);yield ['progress.json',json(await progressPayload({...p,frames:p.frames.filter(c=>!onlyReviewed||c.reviewed)}))];}
-        yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nFor doctor projects, progress.json is a resumable backup with recordings. Unzip this download, then choose progress.json and the original video in Resume saved labeling. Keep the original video separately. Source video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
+        yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nFor doctor projects, progress.json is a resumable backup with recordings. To resume, select this ZIP and the original video in Load local ZIP. No unzipping is required. Keep the original video separately. Source video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
         if(options.includeVideo){const source=await run('videos','readonly',store=>store.get(id));if(!source)throw Error('Source video unavailable.');yield [`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,source.blob];}
       }
       downloadBlob(await zip(clipEntries(),progress),`clip-dataset-${id.slice(0,8)}.zip`);return;

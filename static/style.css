@@ -56,3 +56,5 @@ section.resume-card{padding:0;margin:24px 0 0;max-width:none}
 @media(max-width:760px){#welcome .steps{grid-template-columns:1fr 1fr;gap:16px}#welcome .steps>i{display:none}#welcome .doctor-schema-preview{grid-template-columns:1fr;row-gap:18px}#welcome .schema-region-note>span:last-child{width:100%;margin-left:0}}
 
 @media(max-width:520px){#welcome .steps{grid-template-columns:1fr;gap:14px}}
+
+#welcome .resume-footer{justify-content:flex-end}#welcome #uploadForm .setup-footer{justify-content:flex-end}

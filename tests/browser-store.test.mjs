@@ -28,7 +28,7 @@ function harness({db=new IDBFactory(),duration=2,broken=false}={}) {
   const objectURL={createObjectURL(blob){const url=`blob:test/${++next}`;urls.set(url,blob);return url;},revokeObjectURL(url){urls.delete(url);}};
   const context=vm.createContext({window:{},indexedDB:db,IDBKeyRange,structuredClone,URL:class extends URL {
     static createObjectURL=objectURL.createObjectURL;static revokeObjectURL=objectURL.revokeObjectURL;
-  },Blob,TextEncoder,btoa,atob,crypto:webcrypto,console,location:{href:'https://utkauraslab.github.io/TalktoSim-DataLabeling/'},
+  },Blob,TextEncoder,TextDecoder,btoa,atob,crypto:webcrypto,console,location:{href:'https://utkauraslab.github.io/TalktoSim-DataLabeling/'},
     navigator:{storage:{persist:async()=>true},locks:{
       async request(name,fn){locks.add(name);try{return await fn();}finally{locks.delete(name);}},
       async query(){return {held:[...locks].map(name=>({name}))};}
@@ -299,6 +299,8 @@ test('PDF workspace keeps single choices, audio bytes and one-frame polygons in 
   assert.equal(saved.goal_audio.file_name,'audio/clip_001_goal.webm');assert.equal(saved.outcome_audio.file_name,'audio/clip_001_outcome.m4a');
   assert.equal(await (await h.store.media(p.id,saved.goal_audio.file_name)).text(),'goal-bytes');
   await h.store.exportData(p.id,'zip',false);
+  const fromZIP=harness({duration:100}),resumedZIP=await fromZIP.store.importProgress(h.downloads.at(-1).blob,video,'Doctor');
+  assert.deepEqual(plain(resumedZIP.frames[0].annotation.region),state.region);assert.equal(await (await fromZIP.store.media(resumedZIP.id,saved.goal_audio.file_name)).text(),'goal-bytes');
   const dir=mkdtempSync(path.join(tmpdir(),'framelab-doctor-')),archive=path.join(dir,'doctor.zip');
   try{
     writeFileSync(archive,Buffer.from(await h.downloads.at(-1).blob.arrayBuffer()));
@@ -334,4 +336,12 @@ test('legacy frame projects reconnect to the PDF clip workspace without altering
   const original=await h.store.request(`/api/projects/${old.id}`);assert.equal(original.frames.length,4);assert.deepEqual(plain(original.frames[0].labels),[label]);
   await h.store.exportData(old.id,'json',false);assert.equal(JSON.parse(await h.downloads.at(-1).blob.text()).images.length,4);
   await assert.rejects(h.store.reconnectLegacy(old.id,new File(['v'],'wrong.mp4')),/same filename/);
+});
+
+test('damaged local ZIP is rejected without creating or overwriting a project',async()=>{
+  const h=harness(),video=new File(['v'],'restore.mp4');const p=await h.store.createClipProject(video,'Doctor');await h.store.enableDoctor(p.id);await h.store.addClip(p.id,0,1);
+  await h.store.exportData(p.id,'zip',false);const bytes=Buffer.from(await h.downloads.at(-1).blob.arrayBuffer());
+  const name=bytes.indexOf(Buffer.from('progress.json'));assert(name>30);const header=name-30;const start=name+'progress.json'.length+bytes.readUInt16LE(header+28);bytes[start]^=1;
+  await assert.rejects(h.store.importProgress(new Blob([bytes]),video,'Doctor'),/damaged/);
+  assert.equal((await h.store.request('/api/projects')).length,1);assert.equal((await h.store.request(`/api/projects/${p.id}`)).frames.length,1);
 });
