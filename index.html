@@ -22,10 +22,10 @@
       <div class="setup-footer"><button class="primary" id="startButton">Open video <span>→</span></button></div>
     </form>
     <section class="setup-card resume-card" aria-labelledby="resumeHeading">
-      <div class="card-heading resume-heading"><div><h2 id="resumeHeading">Load local ZIP</h2></div></div>
+      <div class="card-heading resume-heading"><div><h2 id="resumeHeading">Continue saved labeling</h2><p>Upload your saved local ZIP and the original video to pick up where you left off.</p></div></div>
       <div class="resume-files">
-        <div class="resume-file"><label for="progressFile"><span class="resume-step">01</span><span>Saved local ZIP</span></label><input id="progressFile" type="file" accept=".zip,application/zip,application/x-zip-compressed"></div>
-        <div class="resume-file"><label for="resumeVideo"><span class="resume-step">02</span><span>Original video</span></label><input id="resumeVideo" type="file" accept="video/*"></div>
+        <div class="resume-file"><label for="progressFile"><span class="resume-step">01</span><span>Saved local ZIP</span></label><input id="progressFile" type="file" accept=".zip,application/zip,application/x-zip-compressed" aria-describedby="progressFileHelp"><p id="progressFileHelp">Choose the ZIP you downloaded with Download to local. No need to unzip it.</p></div>
+        <div class="resume-file"><label for="resumeVideo"><span class="resume-step">02</span><span>Original video</span></label><input id="resumeVideo" type="file" accept="video/*" aria-describedby="resumeVideoHelp"><p id="resumeVideoHelp">Choose the original video used for this project, with the same filename.</p></div>
       </div>
       <div class="setup-footer resume-footer"><button id="resumeProject" type="button" class="primary">Load ZIP &amp; continue <span aria-hidden="true">→</span></button></div>
     </section>
