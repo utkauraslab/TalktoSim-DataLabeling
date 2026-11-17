@@ -47,10 +47,24 @@ async function refreshProjects() {
   const projects = await api('/api/projects');
   $('projectCount').textContent = projects.length;
   $('projects').replaceChildren(...projects.map(p => {
+    const row=document.createElement('div');row.className='project-row';
     const button = document.createElement('button'); button.className = 'project-item' + (project?.id === p.id ? ' current' : '');
     button.append(document.createTextNode(p.name)); const detail = document.createElement('small');
     detail.textContent = `${{ready:'Ready to annotate', segmenting:'Continue splitting', processing:'Extracting frames', error:'Needs attention'}[p.status]} · ${new Date(p.created_at).toLocaleDateString('en-US')}`;
-    button.append(detail); button.onclick = () => guarded(() => openProject(p.id)); return button;
+    button.title=p.name;button.append(detail);button.onclick=()=>guarded(()=>openProject(p.id));
+    const remove=document.createElement('button');remove.type='button';remove.className='project-delete';remove.textContent='Delete';remove.title=`Delete ${p.name}`;remove.setAttribute('aria-label',`Delete project ${p.name}`);
+    remove.disabled=p.status==='processing';
+    remove.onclick=()=>guarded(async()=>{
+      if(!confirm(`Delete project “${p.name}” from this browser? This removes its saved video copy, clips, recordings and labels. Keep a downloaded progress backup if needed. Your original video file and GitHub submissions are not deleted. This cannot be undone.`))return;
+      remove.disabled=true;
+      try{
+        await frameStore.remove(p.id);
+        if(localStorage.getItem('framelab-project')===p.id)localStorage.removeItem('framelab-project');
+        if(project?.id===p.id){clearTimeout(pollTimer);project=null;$('breadcrumb').textContent='New project';show('welcome');}
+        await refreshProjects();toast('Project deleted from this browser.');
+      }catch(error){remove.disabled=false;throw error;}
+    });
+    row.append(button,remove);return row;
   }));
 }
 async function guarded(action) {
@@ -270,7 +284,8 @@ async function complete() {
     if (!isClipProject() && next >= 0) {current = next; renderFrame();} else { renderFrame(); toast('Saved locally. Click Add a clip to continue, or Finish project when you are done.'); }
   });
 }
-$('newProject').onclick = () => guarded(async () => { clearTimeout(pollTimer); project = null; localStorage.removeItem('framelab-project'); $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); });
+async function showProjects(){clearTimeout(pollTimer);project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}
+$('newProject').onclick=()=>guarded(showProjects);
 $('backFromError').onclick = () => $('newProject').click();
 $('prevFrame').onclick = () => move(-1); $('nextFrame').onclick = () => move(1);
 $('addLabel').onclick = () => { $('labels').append(makeGroup()); $('labels').lastChild.querySelector('input').focus();changed(); };
@@ -410,7 +425,7 @@ $('deleteProject').onclick = () => guarded(async () => {
   $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); toast('Project removed from this browser.');
 });
 timeline=new ClipTimeline({onConfirm:async p=>{await openProject(p.id);current=project.frames.length-1;renderFrame();},onCancel:async p=>{if(p.frames.length)await openProject(p.id);else{project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}},onError:toast});
-doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>$('newProject').click(),onExport:()=>guarded(async()=>{configureExport();resetGithubAuthorization();$('exportDialog').showModal();}),onFinish:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();})});
+doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>guarded(showProjects),onExport:()=>guarded(async()=>{configureExport();resetGithubAuthorization();$('exportDialog').showModal();}),onFinish:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();})});
 (async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { await openProject(id); } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
 
 let exampleRecord;

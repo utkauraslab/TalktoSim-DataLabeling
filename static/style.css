@@ -33,3 +33,10 @@ section.resume-card{padding:0;margin:24px 0 0;max-width:none}
 .resume-footer strong{font-weight:500;color:var(--green)}
 .resume-footer button{flex-shrink:0}
 @media(max-width:650px){.resume-files{grid-template-columns:1fr;padding:0 20px 20px;gap:12px}.resume-heading{padding:20px}.resume-footer{display:flex;flex-direction:column;align-items:stretch;padding:18px 20px;gap:16px}.resume-footer button{width:100%}.resume-file{padding:16px}}
+
+/* Direct project management alongside each project name. */
+.project-row{display:flex;align-items:center;gap:3px;margin-bottom:4px;border-radius:6px;min-width:0}
+.project-row .project-item{flex:1;min-width:0;width:auto;padding-left:8px;padding-right:4px}
+.project-delete{flex-shrink:0;background:#fff5f2;color:#9b483d;border:1px solid #efdbd4;border-radius:5px;font-size:10px;padding:5px 7px;min-height:30px}
+.project-delete:hover{background:#f8e7e1}.project-delete:focus-visible{outline:2px solid #9b483d}
+@media(max-width:850px){.sidebar .projects-label{display:flex;margin:18px 0 8px}.sidebar .projects{display:block;max-height:210px;overflow-y:auto}.project-row .project-item{padding:8px}.project-delete{font-size:11px;padding:6px 12px}}
