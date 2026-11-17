@@ -323,7 +323,9 @@ $('completeFrame').onclick = complete;
 $('editorAnnotator').oninput = () => { localStorage.setItem('framelab-annotator', $('editorAnnotator').value); changed(); };
 $('onlyPending').onchange = () => guarded(async () => { if ($('onlyPending').checked && project.frames[current].reviewed) { const next = project.frames.findIndex(f => !f.reviewed); if (next >= 0) current = next; else toast(`All ${unit()}s have been reviewed.`); } renderFrame(); });
 $('exportButton').onclick = () => guarded(async () => { configureExport(); resetGithubAuthorization(); $('exportDialog').showModal(); });
-function configureExport(){
+function configureExport(mode='all'){
+  const report=mode==='github';$('localExportControls').hidden=report;$('githubUploadSummary').hidden=report;$('githubReviewedOnly').closest('label').hidden=report;
+  $('transferEyebrow').textContent=report?'SUBMIT REPORT':'EXPORT DATASET';$('transferTitle').textContent=report?'Submit to GitHub':'Put your annotations to work';
   $('githubUploadSection').hidden=isClipProject()&&!project.completed;
   $('finishHint').textContent=isClipProject()&&!project.completed?'Work in progress: download locally at any time. Finish project to enable optional GitHub upload.':'';
   const clips=isClipProject();$('includeSourceLabel').hidden=!clips;$('includeSourceVideo').checked=false;$('githubImagesLabel').hidden=clips;
@@ -333,6 +335,7 @@ function configureExport(){
   $('exportStructure').textContent=clips?'dataset.zip\n├── clips.json · Start / end times\n├── annotations.json · Complete clip dataset\n├── events.json · Event labels\n├── README.txt\n└── source/ · Only if selected below':'dataset.zip\n├── images/\n├── annotations.json\n├── events.json\n└── README.txt';
   $('exportHint').textContent=clips?'Clips are exact time ranges in the source video. Independent trimmed MP4 files are not generated. The source video can be included in your local ZIP only.':'Frame-level semantic annotations with COCO-compatible image tables.';
   if(project.annotation_interface==='doctor_v1'){$('exportStructure').textContent='dataset.zip\n├── annotations.json / events.json / clips.json\n├── audio/ · Goal and Outcome recordings\n├── images/ · The selected annotation frames\n└── source/ · Local only, if selected';$('exportDescription').textContent='Download clips, click labels, audio recordings and goal/avoid polygons. JSON-only exports reference media; choose ZIP to include the actual recordings and images.';$('exportHint').textContent='GitHub uploads include JSON and recordings.zip (audio and annotated frames). The source video is never uploaded. Progress backups include recordings for resuming.';}
+  if(report){$('finishHint').textContent='';$('exportDescription').textContent='Submit your saved clips, labels, recordings and region annotations to the repository below. Authorize the upload to continue.';}
   $('exportZip').textContent=clips?'↓ Download ZIP':'↓ Images + JSON (ZIP)';
 }
 let githubBusy=false,githubController=null;
@@ -432,7 +435,7 @@ $('deleteProject').onclick = () => guarded(async () => {
   $('breadcrumb').textContent = 'New project'; show('welcome'); await refreshProjects(); toast('Project removed from this browser.');
 });
 timeline=new ClipTimeline({onConfirm:async p=>{await openProject(p.id);current=project.frames.length-1;renderFrame();},onCancel:async p=>{if(p.frames.length)await openProject(p.id);else{project=null;localStorage.removeItem('framelab-project');$('breadcrumb').textContent='New project';show('welcome');await refreshProjects();}},onError:toast});
-doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>guarded(showProjects),onExport:()=>guarded(async()=>{configureExport();resetGithubAuthorization();$('exportDialog').showModal();}),onFinish:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport();resetGithubAuthorization();$('exportDialog').showModal();})});
+doctorWorkspace=new DoctorWorkspace({onProject:p=>{project=p;},onError:toast,onBack:()=>guarded(showProjects),onSubmit:()=>guarded(async()=>{project=await frameStore.finishProject(project.id);configureExport('github');resetGithubAuthorization();$('githubUploadSection').open=true;$('exportDialog').showModal();})});
 (async () => { try { await refreshProjects(); const id = localStorage.getItem('framelab-project'); if (id) { try { const p=await api(`/api/projects/${id}`);if(p.kind==='clips')await openProject(id);else{localStorage.removeItem('framelab-project');show('welcome');} } catch { localStorage.removeItem('framelab-project'); show('welcome'); } } } catch(err) { toast(err.message); } })();
 
 let exampleRecord;

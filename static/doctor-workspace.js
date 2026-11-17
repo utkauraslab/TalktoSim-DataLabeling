@@ -11,8 +11,8 @@
     error(e){this.onError(e.message||String(e));}
     bind(){
       const action=fn=>async()=>{try{await fn();}catch(e){this.error(e);}};
-      $('dwBack').onclick=this.onBack;$('dwExport').onclick=this.onExport;$('dwFinish').onclick=this.onFinish;
-      $('dwBackup').onclick=action(async()=>{await this.flush();await frameStore.backup(this.project.id);this.onError('Progress downloaded, including recordings and annotation images.');});
+      $('dwBack').onclick=this.onBack;$('dwSubmit').onclick=this.onSubmit;
+      $('dwDownload').onclick=action(async()=>{const button=$('dwDownload');button.disabled=true;button.textContent='Preparing download…';try{await this.flush();await frameStore.exportData(this.project.id,'zip',false);this.onError('Downloaded to your computer, including a backup for continuing later.');}finally{button.disabled=false;button.textContent='Download to local';}});
       $('dwAdd').onclick=()=>{this.start=null;this.end=null;this.cutStatus();this.source.focus();};
       $('dwStart').onclick=()=>{this.start=round(this.source.currentTime);this.cutStatus();};
       $('dwEnd').onclick=()=>{this.end=round(this.source.currentTime);this.cutStatus();};

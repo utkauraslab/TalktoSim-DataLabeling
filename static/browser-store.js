@@ -314,14 +314,18 @@
   }
   async function finishProject(id) {
     return update(id,p=>{
-      if(!p.frames.length||p.frames.some(c=>!c.reviewed))throw Error('Save and complete every clip before finishing the project.');
+      if(!p.frames.length||p.frames.some(c=>!c.reviewed))throw Error('Save and complete every clip (use Save) before submitting to GitHub.');
       p.completed=true;p.completed_at=now();return p;
     });
+  }
+  async function progressPayload(p){
+    const assets=[];for await(const [name,blob]of doctorAssets(p,false))assets.push({name,mime_type:blob.type,base64:await encodeBlob(blob)});
+    return {format:'talktosim-progress',version:2,project:p,media:assets};
   }
   async function backup(id) {
     const p=await readProject(id);
     if(p.kind!=='clips')throw Error('Progress backup is available for clip projects.');
-    downloadBlob(new Blob([JSON.stringify({format:'talktosim-progress',version:2,project:p,media:await (async()=>{const items=[];for await(const [name,blob]of doctorAssets(p,false))items.push({name,mime_type:blob.type,base64:await encodeBlob(blob)});return items;})()},null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
+    downloadBlob(new Blob([JSON.stringify(await progressPayload(p),null,2)],{type:'application/json'}),`progress-${p.id.slice(0,8)}.json`);
   }
   async function importProgress(file,video,annotator) {
     const data=JSON.parse(await file.text());
@@ -332,7 +336,7 @@
     if(!source&&data.info?.annotation_type==='video_clip_audio_regions'&&data.videos?.length===1){
       const v=data.videos[0];source={kind:'clips',annotation_interface:'doctor_v1',event_time_reference:'clip',name:v.source_name,duration:v.duration_seconds,width:v.width,height:v.height,annotator,frames:data.clips.map((c,i)=>{const a=copy(data.annotations.find(a=>a.clip_id===c.id)||{action:'',tool:'',tissue:''});delete a.goal_audio;delete a.outcome_audio;delete a.frame_image;return {id:i+1,clip_id:c.id,start:c.start,end:c.end,reviewed:false,labels:[],annotation:a};})};
     }
-    if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or clip dataset annotations.json. Use Download progress to include audio and frame media.');
+    if(!source||source.kind!=='clips'||!Array.isArray(source.frames)||source.frames.length>20000)throw Error('Choose a FrameLab progress JSON or clip dataset annotations.json. Use progress.json from Download to local to restore recordings and frame media.');
     if(!video||video.name!==source.name)throw Error('Select the original video with the same filename as the progress file.');
     if(!Number.isFinite(source.duration)||source.duration<=0)throw Error('Invalid source duration.');
     source=clipModel.normalizeTiming(source);
@@ -347,7 +351,7 @@
     try{
       if(Math.abs(created.duration-source.duration)>.1||created.width!==source.width||created.height!==source.height)throw Error('This video does not match the saved progress duration or dimensions.');
       if(source.annotation_interface==='doctor_v1'){for(const item of data.media||[]){if(!/^(audio|images)\/[a-zA-Z0-9_.-]+$/.test(item.name)||typeof item.base64!=='string'||item.base64.length>30*1024**2)throw Error('Invalid media in progress backup.');const bytes=Uint8Array.from(atob(item.base64),c=>c.charCodeAt(0));await run('images','readwrite',s=>s.put({key:`${created.id}/${item.name}`,project_id:created.id,blob:new Blob([bytes],{type:item.mime_type})}));}}
-      if(source.annotation_interface==='doctor_v1')for(const c of frames){for(const key of ['goal_audio','outcome_audio','frame_image']){const asset=c.annotation?.[key];if(asset&&(!/^(audio|images)\/[a-zA-Z0-9_.-]+$/.test(asset.file_name)||!await media(created.id,asset.file_name)))throw Error('Recording or frame missing from this backup. Use Download progress to make a complete backup.');}if(c.reviewed&&(!c.annotation?.action||!c.annotation?.tool||!c.annotation?.tissue||!c.annotation?.goal_audio||!c.annotation?.outcome_audio))c.reviewed=false;}
+      if(source.annotation_interface==='doctor_v1')for(const c of frames){for(const key of ['goal_audio','outcome_audio','frame_image']){const asset=c.annotation?.[key];if(asset&&(!/^(audio|images)\/[a-zA-Z0-9_.-]+$/.test(asset.file_name)||!await media(created.id,asset.file_name)))throw Error('Recording or frame missing from this backup. Use progress.json from Download to local to restore a complete backup.');}if(c.reviewed&&(!c.annotation?.action||!c.annotation?.tool||!c.annotation?.tissue||!c.annotation?.goal_audio||!c.annotation?.outcome_audio))c.reviewed=false;}
       return await update(created.id,p=>{if(source.annotation_interface)p.annotation_interface=source.annotation_interface;if(source.vocabulary)p.vocabulary=source.vocabulary;p.frames=frames;p.nextClipId=Math.max(frames.length,...frames.map(c=>Number(c.clip_id.match(/^clip_(\d+)$/)?.[1])||0))+1;p.completed=false;return p;});
     }catch(e){await remove(created.id);throw e;}
   }
@@ -433,8 +437,8 @@
     if(p.kind==='clips'){
       async function* clipEntries(){
         yield ['annotations.json',json(data)];yield ['events.json',json(data.events)];yield ['clips.json',json(data.clips)];
-        if(p.annotation_interface==='doctor_v1')yield* doctorAssets(p,onlyReviewed);
-        yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nSource video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
+        if(p.annotation_interface==='doctor_v1'){yield* doctorAssets(p,onlyReviewed);yield ['progress.json',json(await progressPayload({...p,frames:p.frames.filter(c=>!onlyReviewed||c.reviewed)}))];}
+        yield ['README.txt',new Blob(['Video clip annotation dataset\nClip boundaries are source-video seconds. Event time and O.evidence_interval are seconds from clip start (0). Add clip_start to map event times back to the source video. Independent trimmed video files are not generated.\nannotations.json: complete videos/clips/categories/annotations/events dataset. clips.json: clip intervals.\nFor doctor projects, progress.json is a resumable backup with recordings. Unzip this download, then choose progress.json and the original video in Resume saved labeling. Keep the original video separately. Source video is included under source/ only when selected for local download. Never included in GitHub uploads.\n'])];
         if(options.includeVideo){const source=await run('videos','readonly',store=>store.get(id));if(!source)throw Error('Source video unavailable.');yield [`source/${p.name.replaceAll('/','_').replaceAll('\\','_')}`,source.blob];}
       }
       downloadBlob(await zip(clipEntries(),progress),`clip-dataset-${id.slice(0,8)}.zip`);return;
