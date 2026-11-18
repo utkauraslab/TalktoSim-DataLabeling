@@ -73,7 +73,7 @@
       $('dwAnnotation').hidden=!this.clip;$('dwEmpty').hidden=!!this.clip;$('dwDelete').disabled=!this.clip;this.renderGallery();
       if(!this.clip){$('dwRegions').hidden=true;return;}
       const legacy=this.clip.labels[0];this.state=structuredClone(this.clip.annotation||{action:legacy?.Y?.action||'',tool:legacy?.X?.instrument||'',tissue:legacy?.T?.anatomy||''});
-      $('dwClipTitle').textContent=`Clip ${this.project.frames.indexOf(this.clip)+1}`;$('dwRegionTitle').textContent=$('dwClipTitle').textContent;
+      this.updateClipNames();
       $('dwSaveStatus').textContent=this.clip.reviewed?'Done!':'Not saved';$('dwLocalStatus').textContent='Changes stay on this device.';
       for(const key of ['action','tool','tissue'])this.renderChoices(key);
       await frameStore.attachVideo(this.player,this.project.id);this.clipPlayback.setClip(this.clip);
@@ -85,8 +85,10 @@
       return `Clip ${index+1}${action?` · ${action}`:''}${clip.reviewed?' ✓':''}`;
     }
     updateClipNames(){
+      const options=new Map([...$('dwSelect').options].map(o=>[o.value,o]));
+      if(this.clip){const name=this.clipName(this.clip,this.project.frames.indexOf(this.clip));$('dwClipTitle').textContent=name;$('dwRegionTitle').textContent=name;}
       for(const [index,clip]of this.project.frames.entries()){
-        const name=this.clipName(clip,index),option=[...$('dwSelect').options].find(o=>o.value===clip.clip_id),card=$('dwGallery').children[index];
+        const name=this.clipName(clip,index),option=options.get(clip.clip_id),card=$('dwGallery').children[index];
         if(option)option.textContent=name;
         if(card){card.querySelector('strong').textContent=name;card.setAttribute('aria-label',`Select ${name}`);}
       }
