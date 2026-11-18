@@ -16,3 +16,5 @@ body.doctor-mode .header-actions{display:none}.dw-projectbar>div:first-child{min
 .dw-player-shell:fullscreen{background:#161616;display:flex;flex-direction:column;justify-content:center;padding:18px;gap:8px;width:100%;height:100%}
 #doctorWorkspace .dw-player-shell:fullscreen video{min-height:0;flex:1;aspect-ratio:auto!important;object-fit:contain}
 #doctorWorkspace .dw-player-shell:fullscreen .dw-time{color:#fff}.dw-player-shell:fullscreen .dw-playback-actions{flex-shrink:0}
+
+.dw-region-tools button:first-child{font-size:16px;line-height:1.3;padding:12px 5px;white-space:normal}.dw-thumb strong{overflow-wrap:anywhere}

@@ -48,7 +48,7 @@
         $('dw'+name+'Save').onclick=action(()=>this.saveRegion(type));
       }
       this.canvas.addEventListener('click',e=>{
-        if(!this.image||!this.mode)return this.onError('Choose a frame and click green or pink Go first.');
+        if(!this.image||!this.mode)return this.onError('Choose a frame and click Label target or Label avoid first.');
         const rect=this.canvas.getBoundingClientRect();if(this.points.length>=200)return this.onError('Maximum 200 points per polygon.');
         this.points.push([Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)),Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height))]);this.draw();
         $('dwRegionStatus').textContent=`${this.mode==='goal'?'Goal':'Avoid'} polygon: ${this.points.length} points. Click its matching Save button to finish.`;
@@ -68,7 +68,7 @@
     }
     async select(id,skipFlush=false){
       if(!skipFlush)await this.flush();
-      this.clipPlayback.clear();this.regionPlayback.clear();this.clip=this.project.frames.find(c=>c.clip_id===id)||null;this.points=[];this.mode=null;this.image=null;this.dirty=false;this.version++;$('dwRegionStatus').textContent='';$('dwRegionScrub').value=0;
+      this.clipPlayback.clear();this.regionPlayback.clear();this.clip=this.project.frames.find(c=>c.clip_id===id)||null;this.state=null;this.points=[];this.mode=null;this.image=null;this.dirty=false;this.version++;$('dwRegionStatus').textContent='';$('dwRegionScrub').value=0;
       for(const url of this.audioURLs)URL.revokeObjectURL(url);this.audioURLs=[];
       $('dwAnnotation').hidden=!this.clip;$('dwEmpty').hidden=!!this.clip;$('dwDelete').disabled=!this.clip;this.renderGallery();
       if(!this.clip){$('dwRegions').hidden=true;return;}
@@ -79,15 +79,28 @@
       await frameStore.attachVideo(this.player,this.project.id);this.clipPlayback.setClip(this.clip);
       await this.renderAudio('goal');await this.renderAudio('outcome');await this.regionsVisible();
     }
+    clipName(clip,index){
+      const value=clip===this.clip&&this.state?this.state.action:(clip.annotation?.action||clip.labels?.[0]?.Y?.action||'');
+      const action=typeof value==='string'?value.trim():'';
+      return `Clip ${index+1}${action?` · ${action}`:''}${clip.reviewed?' ✓':''}`;
+    }
+    updateClipNames(){
+      for(const [index,clip]of this.project.frames.entries()){
+        const name=this.clipName(clip,index),option=[...$('dwSelect').options].find(o=>o.value===clip.clip_id),card=$('dwGallery').children[index];
+        if(option)option.textContent=name;
+        if(card){card.querySelector('strong').textContent=name;card.setAttribute('aria-label',`Select ${name}`);}
+      }
+      $('dwClipCount').textContent=`${this.project.frames.length} clips · ${this.project.frames.filter(c=>c.reviewed).length} saved`;
+    }
     renderGallery(){
       const scroll=$('dwGallery').scrollTop;this.observer?.disconnect();
       const picker=$('dwSelect');picker.replaceChildren();
       if(!this.project.frames.length){const o=document.createElement('option');o.textContent='No clips yet';o.value='';picker.append(o);}
       $('dwGallery').replaceChildren(...this.project.frames.map((clip,index)=>{
-        const option=document.createElement('option');option.value=clip.clip_id;option.textContent=`Clip ${index+1}${clip.reviewed?' ✓':''}`;picker.append(option);
-        const card=document.createElement('div');card.className='dw-thumb'+(this.clip?.clip_id===clip.clip_id?' selected':'');card.role='button';card.tabIndex=0;card.setAttribute('aria-label',`Select Clip ${index+1}`);
+        const option=document.createElement('option');option.value=clip.clip_id;option.textContent=this.clipName(clip,index);picker.append(option);
+        const card=document.createElement('div');card.className='dw-thumb'+(this.clip?.clip_id===clip.clip_id?' selected':'');card.role='button';card.tabIndex=0;card.setAttribute('aria-label',`Select ${this.clipName(clip,index)}`);
         const video=document.createElement('video');video.muted=true;video.playsInline=true;video.preload='metadata';video.dataset.start=clip.start;video.dataset.end=clip.end;
-        const title=document.createElement('strong');title.textContent=`Clip ${index+1}${clip.reviewed?' ✓':''}`;const range=document.createElement('small');range.textContent=`${time(clip.start)}–${time(clip.end)}`;card.append(video,title,range);
+        const title=document.createElement('strong');title.textContent=this.clipName(clip,index);const range=document.createElement('small');range.textContent=`${time(clip.start)}–${time(clip.end)}`;card.append(video,title,range);
         const select=async()=>{try{await this.select(clip.clip_id);}catch(e){this.error(e);}};card.onclick=select;card.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};
         card.onmouseenter=()=>{if(video.src)video.play().catch(()=>{});};card.onmouseleave=()=>video.pause();video.ontimeupdate=()=>{if(video.currentTime>=clip.end){video.pause();video.currentTime=clip.start;}};
         return card;
@@ -118,7 +131,7 @@
       };container.append(other);
     }
     changed(){
-      this.dirty=true;this.version++;this.clip.reviewed=false;this.project.completed=false;this.onProject(this.project);$('dwSaveStatus').textContent='Not saved';$('dwLocalStatus').textContent='Saving draft locally…';
+      this.dirty=true;this.version++;this.clip.reviewed=false;this.project.completed=false;this.onProject(this.project);$('dwSaveStatus').textContent='Not saved';$('dwLocalStatus').textContent='Saving draft locally…';this.updateClipNames();
       clearTimeout(this.timer);this.timer=setTimeout(()=>this.persist().catch(e=>this.error(e)),500);
     }
     persist(complete=false,blobs={}){
@@ -130,7 +143,7 @@
           for(const key of Object.keys(media))if(this.unsavedMedia[key]===media[key])delete this.unsavedMedia[key];
           this.clip.annotation=result;this.clip.reviewed=complete&&version===this.version;this.clip.updated_at=new Date().toISOString();this.project.completed=false;
           if(version===this.version){this.state=result;this.dirty=false;$('dwLocalStatus').textContent=complete?'Saved on this device.':'Draft saved on this device. Click Save when finished.';}
-          this.onProject(this.project);
+          this.onProject(this.project);this.updateClipNames();
         }
         return result;
       }).catch(e=>{this.dirty=true;$('dwLocalStatus').textContent='Local save failed. Please retry.';throw e;});this.pending.catch(()=>{});return this.pending;
@@ -198,7 +211,7 @@
       $('dwRegionStatus').textContent=`${type==='goal'?'Goal':'Avoid'} mode · Click at least 3 points. Then Save ${type} areas.`;
     }
     async saveRegion(type){
-      if(!this.image||!this.state.region)throw Error('Choose a frame and click Go first.');
+      if(!this.image||!this.state.region)throw Error('Choose a frame and click Label target or Label avoid first.');
       if(this.points.length){if(this.mode!==type)throw Error('Use the Save button matching the polygon color.');const candidate=structuredClone(this.state);candidate.region[type].push(structuredClone(this.points));doctorModel.validate(candidate,clipModel.clipDuration(this.clip));this.state=candidate;this.points=[];this.changed();}
       await this.persist();this.draw();$('dwRegionStatus').textContent=`${type==='goal'?'Goal':'Avoid'} areas saved on this device.`;
     }
