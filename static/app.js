@@ -411,7 +411,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft') { event.preventDefault(); move(-1); }
   if (event.key === 'ArrowRight') { event.preventDefault(); move(1); }
 });
-window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || timeline?.dirty || doctorWorkspace?.dirty || doctorWorkspace?.recording || doctorWorkspace?.startingRecording || doctorWorkspace?.capturing || doctorWorkspace?.points?.length || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
+window.addEventListener('beforeunload', event => { if (revision !== savedRevision || uploading || githubBusy || timeline?.dirty || doctorWorkspace?.dirty || doctorWorkspace?.recording || doctorWorkspace?.startingRecording || doctorWorkspace?.capturing || doctorWorkspace?.anchors?.drag || doctorWorkspace?.points?.length || project?.status === 'processing') { event.preventDefault(); event.returnValue = ''; } });
 function updateFile() { const file = $('video').files[0]; if (file) { $('fileName').textContent = file.name; $('fileMeta').textContent = `${(file.size / 1024**2).toFixed(1)} MB · Video selected`; } }
 $('video').onchange = updateFile;
 for (const event of ['dragenter','dragover']) $('dropzone').addEventListener(event, e => {e.preventDefault(); $('dropzone').classList.add('dragover');});

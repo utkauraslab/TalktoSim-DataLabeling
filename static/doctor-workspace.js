@@ -8,6 +8,7 @@
       this.source=$('dwSource');this.player=$('dwClip');this.regionVideo=$('dwRegionVideo');this.canvas=$('dwCanvas');
       this.clipPlayback=new ClipPlayback(this.player,{range:$('dwClipScrub'),play:$('dwClipPlay'),display:$('dwClipTiming'),mute:$('dwClipMute'),fullscreen:$('dwClipFullscreen'),shell:$('dwClipShell'),onError:this.onError});
       this.regionPlayback=new ClipPlayback(this.regionVideo,{range:$('dwRegionScrub'),play:$('dwRegionPlay'),display:$('dwRegionTime'),mute:$('dwRegionMute'),fullscreen:$('dwRegionFullscreen'),shell:$('dwRegionShell'),onError:this.onError});
+      this.anchors=new PolygonAnchors(this.canvas,{getShapes:()=>this.anchorShapes(),onPreview:()=>this.draw(),onCommit:drag=>this.commitAnchor(drag),onError:e=>this.error(e)});
       this.bind();
     }
     error(e){this.onError(e.message||String(e));}
@@ -48,12 +49,13 @@
         $('dw'+name+'Save').onclick=action(()=>this.saveRegion(type));
       }
       this.canvas.addEventListener('click',e=>{
+        if(this.anchors.suppressClick){this.anchors.suppressClick=false;return;}
         if(!this.image||!this.mode)return this.onError('Choose a frame and click Label target or Label avoid first.');
         const rect=this.canvas.getBoundingClientRect();if(this.points.length>=200)return this.onError('Maximum 200 points per polygon.');
         this.points.push([Math.max(0,Math.min(1,(e.clientX-rect.left)/rect.width)),Math.max(0,Math.min(1,(e.clientY-rect.top)/rect.height))]);this.draw();
         $('dwRegionStatus').textContent=`${this.mode==='goal'?'Goal':'Avoid'} polygon: ${this.points.length} points. Click its matching Save button to finish.`;
       });
-      this.canvas.addEventListener('keydown',e=>{if(e.key==='Backspace'&&this.points.length){e.preventDefault();this.points.pop();this.draw();}});
+      this.canvas.addEventListener('keydown',e=>{if(e.key==='Backspace'&&this.points.length&&!this.anchors.drag){e.preventDefault();this.points.pop();this.draw();}});
     }
     async open(project){
       this.project=project;this.clip=null;this.state=null;this.dirty=false;this.unsavedMedia={};this.points=[];this.start=this.end=null;
@@ -153,6 +155,7 @@
     async flush(){
       if(this.recording||this.startingRecording)throw Error('Stop the recording before leaving this clip.');
       if(this.capturing)throw Error('Wait for the frame capture to finish.');
+      if(this.anchors?.drag)throw Error('Release the point to finish moving it first.');
       if(this.points.length)throw Error('Save the current polygon, or use Redo before leaving this clip.');
       if(this.dirty)await this.persist();else await this.pending;
     }
@@ -198,6 +201,7 @@
       if(video.readyState<2)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{video.removeEventListener('loadeddata',done);reject(Error('Video frame is not ready.'));},15000);const done=()=>{clearTimeout(timer);resolve();};video.addEventListener('loadeddata',done,{once:true});});
     }
     async beginRegion(type){
+      if(this.anchors.drag)throw Error('Release the point to finish moving it first.');
       if(this.capturing)return;this.capturing=true;
       try{return await this.captureRegion(type);}finally{this.capturing=false;}
     }
@@ -213,14 +217,37 @@
       $('dwRegionStatus').textContent=`${type==='goal'?'Goal':'Avoid'} mode · Click at least 3 points. Then Save ${type} areas.`;
     }
     async saveRegion(type){
+      if(this.anchors.drag)throw Error('Release the point to finish moving it first.');
       if(!this.image||!this.state.region)throw Error('Choose a frame and click Label target or Label avoid first.');
       if(this.points.length){if(this.mode!==type)throw Error('Use the Save button matching the polygon color.');const candidate=structuredClone(this.state);candidate.region[type].push(structuredClone(this.points));doctorModel.validate(candidate,clipModel.clipDuration(this.clip));this.state=candidate;this.points=[];this.changed();}
       await this.persist();this.draw();$('dwRegionStatus').textContent=`${type==='goal'?'Goal':'Avoid'} areas saved on this device.`;
     }
+    anchorShapes(){
+      if(!this.image)return [];
+      const shapes=[];
+      for(const type of ['goal','avoid'])for(const [polygon,points]of (this.state?.region?.[type]||[]).entries())shapes.push({kind:'saved',type,polygon,points});
+      if(this.points.length)shapes.push({kind:'draft',type:this.mode,polygon:-1,points:this.points});
+      return shapes;
+    }
+    async commitAnchor(drag){
+      if(drag.kind==='draft'){
+        if(!this.points[drag.vertex])return;
+        this.points[drag.vertex]=drag.point;
+        $('dwRegionStatus').textContent='Point moved. Continue adding points or save this area.';
+      }else{
+        const candidate=structuredClone(this.state),points=candidate.region?.[drag.type]?.[drag.polygon];
+        if(!points?.[drag.vertex])return;
+        points[drag.vertex]=drag.point;
+        doctorModel.validate(candidate,clipModel.clipDuration(this.clip));
+        this.state=candidate;this.changed();this.draw();await this.persist();
+        $('dwRegionStatus').textContent=`${drag.type==='goal'?'Target':'Avoid'} point moved and saved locally.`;
+      }
+      this.draw();
+    }
     draw(){
-      const c=this.canvas.getContext('2d'),w=this.canvas.width,h=this.canvas.height;c.clearRect(0,0,w,h);if(!this.image)return;c.drawImage(this.image,0,0,w,h);
-      const polygon=(points,type,draft=false)=>{if(!points.length)return;c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x*w,y*h):c.moveTo(x*w,y*h));if(points.length>=3)c.closePath();c.fillStyle=type==='goal'?'rgba(105,160,125,.55)':'rgba(239,139,151,.55)';c.strokeStyle=type==='goal'?'#2a7047':'#b73351';c.lineWidth=Math.max(2,w/400);if(points.length>=3)c.fill();c.stroke();for(const [x,y]of points){c.beginPath();c.arc(x*w,y*h,Math.max(3,w/250),0,Math.PI*2);c.fillStyle=draft?'#fff':c.strokeStyle;c.fill();c.stroke();}};
-      for(const type of ['goal','avoid'])for(const points of this.state?.region?.[type]||[])polygon(points,type);polygon(this.points,this.mode,true);
+      const c=this.canvas.getContext('2d'),w=this.canvas.width,h=this.canvas.height,scale=w/(this.canvas.getBoundingClientRect().width||w);c.clearRect(0,0,w,h);if(!this.image)return;c.drawImage(this.image,0,0,w,h);
+      const polygon=(points,type,draft=false)=>{if(!points.length)return;c.beginPath();points.forEach(([x,y],i)=>i?c.lineTo(x*w,y*h):c.moveTo(x*w,y*h));if(points.length>=3)c.closePath();c.fillStyle=type==='goal'?'rgba(105,160,125,.55)':'rgba(239,139,151,.55)';c.strokeStyle=type==='goal'?'#2a7047':'#b73351';c.lineWidth=1.5*scale;if(points.length>=3)c.fill();c.stroke();for(const [x,y]of points){c.beginPath();c.arc(x*w,y*h,5*scale,0,Math.PI*2);c.fillStyle=draft?'#fff':c.strokeStyle;c.fill();c.stroke();}};
+      for(const type of ['goal','avoid'])for(const [index,points]of (this.state?.region?.[type]||[]).entries())polygon(this.anchors.preview(points,type,'saved',index),type);polygon(this.anchors.preview(this.points,this.mode,'draft',-1),this.mode,true);
     }
   }
   window.DoctorWorkspace=DoctorWorkspace;
